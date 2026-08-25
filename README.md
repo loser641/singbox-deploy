@@ -30,7 +30,7 @@ sing-box 多协议一键部署脚本，面向低配 VPS（Alpine Linux / Debian 
 在 VPS 上运行：
 
 ```bash
-wget -O install-singbox.sh <你的raw地址>/install-singbox.sh
+wget -O install-singbox.sh https://raw.githubusercontent.com/loser641/singbox-deploy/main/install-singbox.sh
 chmod +x install-singbox.sh
 ./install-singbox.sh
 ```
@@ -38,7 +38,7 @@ chmod +x install-singbox.sh
 或：
 
 ```bash
-curl -fsSL <你的raw地址>/install-singbox.sh -o install-singbox.sh && sh install-singbox.sh
+curl -fsSL https://raw.githubusercontent.com/loser641/singbox-deploy/main/install-singbox.sh -o install-singbox.sh && sh install-singbox.sh
 ```
 
 ## 管理面板
