@@ -548,7 +548,7 @@ add_vless_reality() {
     PORT=40443
 
     echo
-    printf "端口 [40443]: "
+    printf "VLESS REALITY 端口 [40443]: "
     read X
 
     [ -n "$X" ] && PORT="$X"
@@ -621,7 +621,7 @@ add_vless_reality_free() {
     PORT=50443
 
     echo
-    printf "端口 [50443]: "
+    printf "VLESS REALITY 免流 端口 [50443]: "
     read X
 
     [ -n "$X" ] && PORT="$X"
@@ -974,7 +974,7 @@ add_anyreality() {
     echo "直接回车使用默认值，也可以修改。"
     echo
 
-    printf "端口 [30443]: "
+    printf "AnyReality 端口 [30443]: "
     read X
     [ -n "$X" ] && PORT="$X"
 
@@ -1063,12 +1063,26 @@ rebuild_config() {
     mkdir -p "$INBOUND_DIR"
 
     TMP="$BASE/config.tmp.json"
+    INLIST="$BASE/inbounds.list.json"
+
+    if ls "$INBOUND_DIR"/*.json >/dev/null 2>&1; then
+
+        jq -s '.' "$INBOUND_DIR"/*.json > "$INLIST" 2>/dev/null || {
+            echo "配置合并失败（inbounds 解析错误）。"
+            return 1
+        }
+
+    else
+
+        echo "配置合并失败（没有配置文件）。"
+        return 1
+    fi
 
     if [ -f "$BASE/dns.json" ]; then
 
         jq -n \
             --slurpfile dns "$BASE/dns.json" \
-            --slurpfile in "$INBOUND_DIR"/*.json \
+            --slurpfile in "$INLIST" \
             '{
                 log: {
                     level: "warn",
@@ -1076,7 +1090,7 @@ rebuild_config() {
                     timestamp: true
                 },
                 dns: $dns[0].dns,
-                inbounds: $in,
+                inbounds: $in[0],
                 outbounds: [
                     {
                         type: "direct",
@@ -1088,14 +1102,14 @@ rebuild_config() {
     else
 
         jq -n \
-            --slurpfile in "$INBOUND_DIR"/*.json \
+            --slurpfile in "$INLIST" \
             '{
                 log: {
                     level: "warn",
                     output: "/dev/null",
                     timestamp: true
                 },
-                inbounds: $in,
+                inbounds: $in[0],
                 outbounds: [
                     {
                         type: "direct",
@@ -1104,6 +1118,8 @@ rebuild_config() {
                 ]
             }' > "$TMP" 2>/dev/null
     fi
+
+    rm -f "$INLIST"
 
     if [ ! -s "$TMP" ]; then
         echo "配置合并失败。"
@@ -1900,15 +1916,30 @@ service_status() {
 
 rebuild() {
 
+    INLIST="$BASE/inbounds.list.json"
+
+    if ls "$BASE/inbounds"/*.json >/dev/null 2>&1; then
+
+        jq -s '.' "$BASE/inbounds"/*.json > "$INLIST" 2>/dev/null || {
+            echo "配置合并失败（inbounds 解析错误）。"
+            return 1
+        }
+
+    else
+
+        echo "配置合并失败（没有配置文件）。"
+        return 1
+    fi
+
     jq -n \
-        --slurpfile in "$BASE/inbounds"/*.json \
+        --slurpfile in "$INLIST" \
         '{
             log: {
                 level: "warn",
                 output: "/dev/null",
                 timestamp: true
             },
-            inbounds: $in,
+            inbounds: $in[0],
             outbounds: [
                 {
                     type: "direct",
@@ -1916,6 +1947,8 @@ rebuild() {
                 }
             ]
         }' > "$BASE/config.json"
+
+    rm -f "$INLIST"
 
     "$BIN" check -c "$BASE/config.json"
 }
@@ -2484,31 +2517,6 @@ initial_setup() {
 main() {
 
     clear 2>/dev/null || true
-
-    echo "=================================================="
-    echo "     sing-box 多协议自动部署系统"
-    echo "=================================================="
-    echo
-    echo "VLESS + REALITY"
-    echo "  SNI: itunes.apple.com"
-    echo "  Port: 40443"
-    echo
-    echo "VLESS + REALITY 免流"
-    echo "  SNI: dx-baiducdnct.inter.iqiyi.com"
-    echo "  Port: 50443"
-    echo
-    echo "TUIC / AnyTLS / Shadowsocks / Hysteria2"
-    echo "  Port: random 20000+"
-    echo
-    echo "AnyReality"
-    echo "  SNI: itunes.apple.com"
-    echo "  Port: 30443"
-    echo
-    echo "TLS: www.bing.com 自签名证书（仅 TUIC/AnyTLS/Hysteria2 需要时生成）"
-    echo "BBR: auto detect / enable"
-    echo
-    echo "=================================================="
-    echo
 
     if [ -x "$BIN" ] && { [ -x /usr/local/bin/lsb ] || [ -x /usr/local/bin/singbox ]; }; then
 
