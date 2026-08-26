@@ -3124,6 +3124,7 @@ main() {
     if [ "${1:-}" = "--add-config" ]; then
         detect_os
         add_config_menu
+        show_links
         exit $?
     fi
 
