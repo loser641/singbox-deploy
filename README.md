@@ -18,7 +18,8 @@ sing-box 多协议一键部署脚本，面向低配 VPS（Alpine Linux / Debian 
 
 - 自动生成 UUID / REALITY 密钥对 / ShortID
 - 需要证书的协议才生成证书、才安装 openssl（不选 TUIC/AnyTLS/Hysteria2 就不装）
-- 节点备注格式：`出口国家简称-协议名`，如 `DE-reality`、`US-reality免流`、`SG-anyreality`
+- 支持**多选部署**：一次输入 `1,4,6` 可同时添加多个协议
+- 节点备注格式：`出口国家简称-协议名`，如 `DE-reality`、`US-reality免流`、`SG-anyreality`，国家简称**自动识别出口 IP 归属地**
 - 部署完成后直接列出所有节点分享信息，方便客户端导入
 - BBR 自适应开启
 - 管理面板：`lsb` 或 `singbox`

@@ -1241,6 +1241,32 @@ add_all_configs() {
 }
 
 # ==========================================================
+# Run multi selection (e.g. 1,4,6 / 1，4，6)
+# ==========================================================
+
+run_selection() {
+
+    SELECTION="$1"
+
+    for ITEM in $(printf '%s' "$SELECTION" | sed 's/，/,/g' | tr ',' ' '); do
+
+        [ -n "$ITEM" ] || continue
+
+        case "$ITEM" in
+            1) add_vless_reality ;;
+            2) add_shadowsocks ;;
+            3) add_tuic ;;
+            4) add_anytls ;;
+            5) add_hysteria2 ;;
+            6) add_anyreality ;;
+            7) add_vless_reality_free ;;
+            8) add_all_configs ;;
+            *) echo "无效选项：$ITEM（已跳过）" ;;
+        esac
+    done
+}
+
+# ==========================================================
 # Add configuration
 # ==========================================================
 
@@ -1261,20 +1287,15 @@ add_config_menu() {
     echo "8. 全部添加"
     echo
 
-    printf "请选择："
+    printf "请选择（可多选，如 1,4,6）："
     read N
 
-    case "$N" in
-        1) add_vless_reality ;;
-        2) add_shadowsocks ;;
-        3) add_tuic ;;
-        4) add_anytls ;;
-        5) add_hysteria2 ;;
-        6) add_anyreality ;;
-        7) add_vless_reality_free ;;
-        8) add_all_configs ;;
-        *) echo "无效选择。"; return ;;
-    esac
+    [ -n "$N" ] || {
+        echo "未选择。"
+        return
+    }
+
+    run_selection "$N"
 
     rebuild_config
     start_service
@@ -2285,6 +2306,66 @@ EOF
 }
 
 # ==========================================================
+# Auto detect exit country
+# ==========================================================
+
+detect_country() {
+
+    COUNTRY=""
+
+    echo
+    echo "=========================================="
+    echo " 出口国家检测"
+    echo "=========================================="
+    echo
+
+    COUNTRY="$(
+        curl -4 -fsSL --max-time 5 https://ipinfo.io/json 2>/dev/null |
+        jq -r '.country // empty' 2>/dev/null
+    )"
+
+    if [ -z "$COUNTRY" ]; then
+
+        COUNTRY="$(
+            curl -4 -fsSL --max-time 5 https://ipwho.is/ 2>/dev/null |
+            jq -r '.country_code // empty' 2>/dev/null
+        )"
+    fi
+
+    if [ -z "$COUNTRY" ]; then
+
+        COUNTRY="$(
+            curl -4 -fsSL --max-time 5 https://ifconfig.co/json 2>/dev/null |
+            jq -r '.country_iso_code // empty' 2>/dev/null
+        )"
+    fi
+
+    if [ -z "$COUNTRY" ]; then
+
+        COUNTRY="$(
+            curl -4 -fsSL --max-time 5 https://api.country.is/ 2>/dev/null
+        )"
+    fi
+
+    COUNTRY="$(printf '%s' "$COUNTRY" | tr -cd 'A-Za-z' | tr 'a-z' 'A-Z')"
+
+    if [ -z "$COUNTRY" ]; then
+
+        echo "[!] 自动识别失败，请手动输入出口国家简称。"
+        printf "出口国家简称 [US]: "
+        read COUNTRY_INPUT
+
+        [ -n "$COUNTRY_INPUT" ] && COUNTRY="$COUNTRY_INPUT"
+
+        COUNTRY="$(printf '%s' "$COUNTRY" | tr 'a-z' 'A-Z')"
+    fi
+
+    [ -n "$COUNTRY" ] || COUNTRY="US"
+
+    echo "出口国家：$COUNTRY"
+}
+
+# ==========================================================
 # Initial setup
 # ==========================================================
 
@@ -2312,14 +2393,10 @@ initial_setup() {
     echo
     echo "备注格式：出口国家简称-协议名，如 DE-reality、US-reality免流、SG-anyreality"
     echo
-    printf "出口国家简称 [US]: "
-    read COUNTRY_INPUT
 
-    [ -n "$COUNTRY_INPUT" ] && COUNTRY="$COUNTRY_INPUT"
+    detect_country
 
-    COUNTRY="$(printf '%s' "$COUNTRY" | tr 'a-z' 'A-Z')"
     printf 'COUNTRY=%s\n' "$COUNTRY" > "$INFO"
-
     echo "节点备注国家：$COUNTRY"
 
     echo
@@ -2338,55 +2415,25 @@ initial_setup() {
     echo "8. 全部添加"
     echo
 
-    printf "选择："
+    printf "选择（可多选，如 1,4,6，直接回车跳过）："
     read INIT
 
-    case "$INIT" in
+    if [ -n "$INIT" ]; then
 
-        1)
-            add_vless_reality
-            ;;
+        run_selection "$INIT"
 
-        2)
-            add_shadowsocks
-            ;;
+        rebuild_config || exit 1
 
-        3)
-            add_tuic
-            ;;
+        start_service
 
-        4)
-            add_anytls
-            ;;
+        "$BASE/generate-links.sh"
 
-        5)
-            add_hysteria2
-            ;;
+    else
 
-        6)
-            add_anyreality
-            ;;
-
-        7)
-            add_vless_reality_free
-            ;;
-
-        8)
-            add_all_configs
-            ;;
-
-        *)
-            echo "暂不添加配置。"
-            ;;
-    esac
-
-    rebuild_config || exit 1
-
-    install_service
-
-    start_service
-
-    "$BASE/generate-links.sh"
+        echo
+        echo "暂不添加配置，之后可用 lsb 或 singbox 管理面板添加。"
+        echo
+    fi
 
     echo
     echo "=========================================="
