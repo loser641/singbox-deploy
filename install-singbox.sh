@@ -2205,10 +2205,33 @@ edit_config() {
 
     [ -n "$TAG" ] || return
 
-    /usr/local/bin/sing-box-edit-config "$TAG" && {
-        rebuild
-        service_restart
-    }
+    if [ -x /usr/local/bin/sing-box-edit-config ]; then
+
+        /usr/local/bin/sing-box-edit-config "$TAG" && {
+            rebuild
+            service_restart
+        }
+
+    else
+
+        FILE=""
+
+        for F in "$BASE/inbounds"/*.json; do
+            [ -f "$F" ] || continue
+            if [ "$(jq -r '.tag' "$F")" = "$TAG" ]; then
+                FILE="$F"
+                break
+            fi
+        done
+
+        if [ -n "$FILE" ]; then
+            vi "$FILE"
+            rebuild
+            service_restart
+        else
+            echo "不存在。"
+        fi
+    fi
 }
 
 show_links() {
