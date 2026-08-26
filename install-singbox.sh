@@ -1692,7 +1692,9 @@ generate_links() {
             METHOD="$(jq -r '.method' "$FILE")"
             PASSWORD="$(jq -r '.password' "$FILE")"
 
-            echo "ss://${METHOD}:${PASSWORD}@${IP}:${PORT}#${REMARK}" \
+            PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')"
+
+            echo "ss://${METHOD}:${PASSWORD_ENC}@${IP}:${PORT}#${REMARK}" \
                 > "$LINK_DIR/$TAG.txt"
             ;;
 
@@ -1747,7 +1749,9 @@ generate_links() {
 
             PASSWORD="$(jq -r '.users[0].password' "$FILE")"
 
-            echo "hysteria2://${PASSWORD}@${IP}:${PORT}/?sni=www.bing.com&insecure=1#${REMARK}" \
+            PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')"
+
+            echo "hysteria2://${PASSWORD_ENC}@${IP}:${PORT}/?sni=www.bing.com&insecure=1#${REMARK}" \
                 > "$LINK_DIR/$TAG.txt"
             ;;
 
@@ -1756,7 +1760,9 @@ generate_links() {
             UUID="$(jq -r '.users[0].uuid' "$FILE")"
             PASSWORD="$(jq -r '.users[0].password' "$FILE")"
 
-            echo "tuic://${UUID}:${PASSWORD}@${IP}:${PORT}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=www.bing.com&allow_insecure=1#${REMARK}" \
+            PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')"
+
+            echo "tuic://${UUID}:${PASSWORD_ENC}@${IP}:${PORT}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=www.bing.com&allow_insecure=1#${REMARK}" \
                 > "$LINK_DIR/$TAG.txt"
             ;;
 
@@ -3019,8 +3025,10 @@ for FILE in "$BASE/inbounds"/*.json; do
         METHOD="$(jq -r '.method' "$FILE")"
         PASSWORD="$(jq -r '.password' "$FILE")"
 
+        PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')"
+
         printf '%s\n' \
-            "ss://${METHOD}:${PASSWORD}@${IP}:${PORT}#${REMARK}" \
+            "ss://${METHOD}:${PASSWORD_ENC}@${IP}:${PORT}#${REMARK}" \
             > "$LINK_DIR/$TAG.txt"
         ;;
 
@@ -3073,8 +3081,10 @@ for FILE in "$BASE/inbounds"/*.json; do
 
         PASSWORD="$(jq -r '.users[0].password' "$FILE")"
 
+        PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')"
+
         printf '%s\n' \
-            "hysteria2://${PASSWORD}@${IP}:${PORT}/?sni=www.bing.com&insecure=1#${REMARK}" \
+            "hysteria2://${PASSWORD_ENC}@${IP}:${PORT}/?sni=www.bing.com&insecure=1#${REMARK}" \
             > "$LINK_DIR/$TAG.txt"
         ;;
 
@@ -3083,8 +3093,10 @@ for FILE in "$BASE/inbounds"/*.json; do
         UUID="$(jq -r '.users[0].uuid' "$FILE")"
         PASSWORD="$(jq -r '.users[0].password' "$FILE")"
 
+        PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')"
+
         printf '%s\n' \
-            "tuic://${UUID}:${PASSWORD}@${IP}:${PORT}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=www.bing.com&allow_insecure=1#${REMARK}" \
+            "tuic://${UUID}:${PASSWORD_ENC}@${IP}:${PORT}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=www.bing.com&allow_insecure=1#${REMARK}" \
             > "$LINK_DIR/$TAG.txt"
         ;;
 
