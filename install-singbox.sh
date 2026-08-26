@@ -1009,6 +1009,51 @@ ensure_order() {
     mv "$TMPO" "$ORDER"
 }
 
+find_tag_by_number() {
+
+    n=0
+
+    if [ -f "$BASE/order" ]; then
+
+        while IFS= read -r FNAME; do
+
+            [ -n "$FNAME" ] || continue
+
+            FILE="$INBOUND_DIR/$FNAME"
+
+            [ -f "$FILE" ] || continue
+
+            n=$((n+1))
+
+            if [ "$n" = "$1" ]; then
+                jq -r '.tag' "$FILE"
+                return 0
+            fi
+
+        done < "$BASE/order"
+    fi
+
+    for FILE in "$INBOUND_DIR"/*.json; do
+
+        [ -f "$FILE" ] || continue
+
+        FNAME="$(basename "$FILE")"
+
+        if [ -f "$BASE/order" ] && grep -qxF "$FNAME" "$BASE/order"; then
+            continue
+        fi
+
+        n=$((n+1))
+
+        if [ "$n" = "$1" ]; then
+            jq -r '.tag' "$FILE"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 # ==========================================================
 # AnyReality (AnyTLS + REALITY)
 # ==========================================================
@@ -1429,10 +1474,20 @@ delete_config() {
     list_configs
 
     echo
-    printf "输入要删除的 tag："
-    read TAG
+    printf "输入编号或 Tag："
+    read INPUT
 
-    [ -n "$TAG" ] || return
+    [ -n "$INPUT" ] || return
+
+    case "$INPUT" in
+        ''|*[!0-9]*) TAG="$INPUT" ;;
+        *) TAG="$(find_tag_by_number "$INPUT")" ;;
+    esac
+
+    [ -n "$TAG" ] || {
+        echo "没有找到该配置。"
+        return
+    }
 
     for FILE in "$INBOUND_DIR"/*.json; do
 
@@ -1470,8 +1525,20 @@ view_config() {
     list_configs
 
     echo
-    printf "输入 tag："
-    read TAG
+    printf "输入编号或 Tag："
+    read INPUT
+
+    [ -n "$INPUT" ] || return
+
+    case "$INPUT" in
+        ''|*[!0-9]*) TAG="$INPUT" ;;
+        *) TAG="$(find_tag_by_number "$INPUT")" ;;
+    esac
+
+    [ -n "$TAG" ] || {
+        echo "没有找到。"
+        return
+    }
 
     for FILE in "$INBOUND_DIR"/*.json; do
 
@@ -1498,10 +1565,20 @@ edit_config() {
     list_configs
 
     echo
-    printf "输入要编辑的 tag："
-    read TAG
+    printf "输入编号或 Tag："
+    read INPUT
 
-    [ -n "$TAG" ] || return
+    [ -n "$INPUT" ] || return
+
+    case "$INPUT" in
+        ''|*[!0-9]*) TAG="$INPUT" ;;
+        *) TAG="$(find_tag_by_number "$INPUT")" ;;
+    esac
+
+    [ -n "$TAG" ] || {
+        echo "没有找到。"
+        return
+    }
 
     FOUND=""
 
@@ -2211,6 +2288,51 @@ list_configs() {
     [ "$found" = "1" ] || echo "  暂无"
 }
 
+find_tag_by_number() {
+
+    n=0
+
+    if [ -f "$BASE/order" ]; then
+
+        while IFS= read -r FNAME; do
+
+            [ -n "$FNAME" ] || continue
+
+            FILE="$BASE/inbounds/$FNAME"
+
+            [ -f "$FILE" ] || continue
+
+            n=$((n+1))
+
+            if [ "$n" = "$1" ]; then
+                jq -r '.tag' "$FILE"
+                return 0
+            fi
+
+        done < "$BASE/order"
+    fi
+
+    for FILE in "$BASE/inbounds"/*.json; do
+
+        [ -f "$FILE" ] || continue
+
+        FNAME="$(basename "$FILE")"
+
+        if [ -f "$BASE/order" ] && grep -qxF "$FNAME" "$BASE/order"; then
+            continue
+        fi
+
+        n=$((n+1))
+
+        if [ "$n" = "$1" ]; then
+            jq -r '.tag' "$FILE"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 service_start() {
 
     if command -v systemctl >/dev/null 2>&1; then
@@ -2332,50 +2454,36 @@ view_config() {
     list_configs
 
     echo
-    printf "输入编号："
-    read NUM
+    printf "输入编号或 Tag："
+    read INPUT
 
-    n=0
+    [ -n "$INPUT" ] || return
 
-    if [ -f "$BASE/order" ]; then
+    case "$INPUT" in
+        ''|*[!0-9]*) TAG="$INPUT" ;;
+        *) TAG="$(find_tag_by_number "$INPUT")" ;;
+    esac
 
-        while IFS= read -r FNAME; do
+    [ -n "$TAG" ] || {
+        echo "没有找到。"
+        return
+    }
 
-            [ -n "$FNAME" ] || continue
+    FILE=""
 
-            FILE="$BASE/inbounds/$FNAME"
-
-            [ -f "$FILE" ] || continue
-
-            n=$((n+1))
-
-            if [ "$n" = "$NUM" ]; then
-                jq . "$FILE"
-                return
-            fi
-
-        done < "$BASE/order"
-    fi
-
-    for FILE in "$BASE/inbounds"/*.json; do
-
-        [ -f "$FILE" ] || continue
-
-        FNAME="$(basename "$FILE")"
-
-        if [ -f "$BASE/order" ] && grep -qxF "$FNAME" "$BASE/order"; then
-            continue
-        fi
-
-        n=$((n+1))
-
-        if [ "$n" = "$NUM" ]; then
-            jq . "$FILE"
-            return
+    for F in "$BASE/inbounds"/*.json; do
+        [ -f "$F" ] || continue
+        if [ "$(jq -r '.tag' "$F")" = "$TAG" ]; then
+            FILE="$F"
+            break
         fi
     done
 
-    echo "没有找到。"
+    if [ -n "$FILE" ]; then
+        jq . "$FILE"
+    else
+        echo "没有找到。"
+    fi
 }
 
 delete_config() {
@@ -2383,10 +2491,20 @@ delete_config() {
     list_configs
 
     echo
-    printf "删除 Tag："
-    read TAG
+    printf "输入编号或 Tag："
+    read INPUT
 
-    [ -n "$TAG" ] || return
+    [ -n "$INPUT" ] || return
+
+    case "$INPUT" in
+        ''|*[!0-9]*) TAG="$INPUT" ;;
+        *) TAG="$(find_tag_by_number "$INPUT")" ;;
+    esac
+
+    [ -n "$TAG" ] || {
+        echo "不存在。"
+        return
+    }
 
     FILE=""
 
@@ -2425,10 +2543,20 @@ edit_config() {
     list_configs
 
     echo
-    printf "Tag："
-    read TAG
+    printf "输入编号或 Tag："
+    read INPUT
 
-    [ -n "$TAG" ] || return
+    [ -n "$INPUT" ] || return
+
+    case "$INPUT" in
+        ''|*[!0-9]*) TAG="$INPUT" ;;
+        *) TAG="$(find_tag_by_number "$INPUT")" ;;
+    esac
+
+    [ -n "$TAG" ] || {
+        echo "没有找到。"
+        return
+    }
 
     if [ -x /usr/local/bin/sing-box-edit-config ]; then
 
