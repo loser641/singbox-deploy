@@ -2780,7 +2780,7 @@ update_menu() {
 
 while :; do
 
-    clear
+    echo
 
     echo "================================================"
     echo "             sing-box 管理面板"
