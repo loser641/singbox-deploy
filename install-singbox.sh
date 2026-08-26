@@ -2053,6 +2053,46 @@ set_info() {
     fi
 }
 
+read_required() {
+
+    REQ=""
+
+    while :; do
+        printf "%s" "$1"
+        read REQ
+        [ -n "$REQ" ] && return 0
+        echo "输入不能为空，请重新输入。"
+    done
+}
+
+read_port() {
+
+    REQ=""
+
+    while :; do
+        printf "%s" "$1"
+        read REQ
+        case "$REQ" in
+            ''|*[!0-9]*) echo "端口必须是数字，请重新输入。" ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+read_shortid() {
+
+    REQ=""
+
+    while :; do
+        printf "%s" "$1"
+        read REQ
+        case "$REQ" in
+            ''|*[!0-9a-fA-F]*) echo "ShortID 必须是十六进制字符，请重新输入。" ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
 TYPE="$(jq -r '.type' "$FILE")"
 
 while :; do
@@ -2110,9 +2150,8 @@ while :; do
     case "$CH" in
 
         1)
-            printf "新端口 [$PORT]: "
-            read NEW
-            [ -n "$NEW" ] || continue
+            read_port "新端口 [$PORT]: "
+            NEW="$REQ"
             jq --arg v "$NEW" '.listen_port = ($v | tonumber)' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
             mv "$FILE.tmp" "$FILE"
             set_info "$TAG" "PORT=$NEW"
@@ -2120,9 +2159,8 @@ while :; do
 
         2)
             if [ "$TYPE" = "vless" ] || [ "$TYPE" = "tuic" ]; then
-                printf "新 UUID [$UUID]: "
-                read NEW
-                [ -n "$NEW" ] || continue
+                read_required "新 UUID [$UUID]: "
+                NEW="$REQ"
                 jq --arg v "$NEW" '.users[0].uuid = $v' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
                 mv "$FILE.tmp" "$FILE"
                 set_info "$TAG" "UUID=$NEW"
@@ -2132,17 +2170,15 @@ while :; do
         3)
             case "$TYPE" in
                 shadowsocks)
-                    printf "新密码 [$PASS]: "
-                    read NEW
-                    [ -n "$NEW" ] || continue
+                    read_required "新密码 [$PASS]: "
+                    NEW="$REQ"
                     jq --arg v "$NEW" '.password = $v' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
                     mv "$FILE.tmp" "$FILE"
                     set_info "$TAG" "PASSWORD=$NEW"
                     ;;
                 anytls|anyreality|hysteria2|tuic)
-                    printf "新密码 [$PASS]: "
-                    read NEW
-                    [ -n "$NEW" ] || continue
+                    read_required "新密码 [$PASS]: "
+                    NEW="$REQ"
                     jq --arg v "$NEW" '.users[0].password = $v' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
                     mv "$FILE.tmp" "$FILE"
                     set_info "$TAG" "PASSWORD=$NEW"
@@ -2153,9 +2189,8 @@ while :; do
         4)
             case "$TYPE" in
                 vless|anytls|anyreality|hysteria2|tuic)
-                    printf "新 SNI [$SNI]: "
-                    read NEW
-                    [ -n "$NEW" ] || continue
+                    read_required "新 SNI [$SNI]: "
+                    NEW="$REQ"
                     jq --arg v "$NEW" '
                         .tls.server_name = $v |
                         if .tls.reality then .tls.reality.handshake.server = $v else . end
@@ -2172,12 +2207,10 @@ while :; do
                 echo "提示：先用 sing-box generate reality-keypair 生成新密钥对，"
                 echo "然后分别输入私钥和公钥。"
                 echo
-                printf "新 PrivateKey："
-                read NEWPK
-                [ -n "$NEWPK" ] || continue
-                printf "对应的 PublicKey："
-                read NEWPBK
-                [ -n "$NEWPBK" ] || continue
+                read_required "新 PrivateKey："
+                NEWPK="$REQ"
+                read_required "对应的 PublicKey："
+                NEWPBK="$REQ"
                 jq --arg v "$NEWPK" '.tls.reality.private_key = $v' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
                 mv "$FILE.tmp" "$FILE"
                 set_info "$TAG" "PUBLIC_KEY=$NEWPBK"
@@ -2186,9 +2219,8 @@ while :; do
 
         6)
             if [ "$TYPE" = "vless" ] || [ "$TYPE" = "anyreality" ]; then
-                printf "新 ShortID [$SID]: "
-                read NEW
-                [ -n "$NEW" ] || continue
+                read_shortid "新 ShortID [$SID]: "
+                NEW="$REQ"
                 if [ "$TYPE" = "vless" ]; then
                     jq --arg v "$NEW" '.tls.reality.short_id = [$v]' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
                 else
