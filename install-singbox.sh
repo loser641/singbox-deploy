@@ -73,6 +73,17 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+ask_yes_no() {
+
+    printf "%s [y/N]: " "$1"
+    read ANSWER
+
+    case "$ANSWER" in
+        [yY]|[yY][eE][sS]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # ==========================================================
 # Detect OS
 # ==========================================================
@@ -1728,10 +1739,7 @@ uninstall_all() {
     echo " 卸载"
     echo "=========================================="
 
-    printf "确认卸载？输入 YES："
-    read CONFIRM
-
-    [ "$CONFIRM" = "YES" ] || {
+    ask_yes_no "确认卸载？" || {
         echo "取消。"
         return
     }
@@ -2145,6 +2153,17 @@ pause() {
     echo
     printf "按 Enter 继续..."
     read x
+}
+
+ask_yes_no() {
+
+    printf "%s [y/N]: " "$1"
+    read ANSWER
+
+    case "$ANSWER" in
+        [yY]|[yY][eE][sS]) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 list_configs() {
@@ -2720,10 +2739,7 @@ while :; do
 
         15)
             echo
-            printf "输入 YES 确认卸载："
-            read X
-
-            if [ "$X" = "YES" ]; then
+            if ask_yes_no "确认卸载？"; then
                 service_stop 2>/dev/null || true
                 rm -f /usr/local/bin/sing-box
                 rm -f /usr/local/bin/lsb
