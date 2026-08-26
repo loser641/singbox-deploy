@@ -2661,7 +2661,16 @@ while :; do
     case "$MENU" in
 
         1)
-            echo "请重新运行安装脚本添加配置。"
+            if [ ! -x /usr/local/bin/install-singbox.sh ] || ! grep -q -- '--add-config' /usr/local/bin/install-singbox.sh; then
+                echo "下载安装脚本..."
+                curl -fsSL --max-time 20 "https://raw.githubusercontent.com/loser641/singbox-deploy/main/install-singbox.sh" -o /usr/local/bin/install-singbox.sh || {
+                    echo "下载失败，请检查网络。"
+                    pause
+                    continue
+                }
+                chmod +x /usr/local/bin/install-singbox.sh
+            fi
+            sh /usr/local/bin/install-singbox.sh --add-config
             pause
             ;;
 
@@ -3110,6 +3119,12 @@ main() {
         printf '%s\n' "$SCRIPT_VERSION" > "$BASE/script-version"
         echo "组件已更新。"
         exit 0
+    fi
+
+    if [ "${1:-}" = "--add-config" ]; then
+        detect_os
+        add_config_menu
+        exit $?
     fi
 
     clear 2>/dev/null || true
