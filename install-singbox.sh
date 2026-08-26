@@ -1394,46 +1394,40 @@ edit_config() {
     printf "输入要编辑的 tag："
     read TAG
 
+    [ -n "$TAG" ] || return
+
+    FOUND=""
+
     for FILE in "$INBOUND_DIR"/*.json; do
 
         [ -f "$FILE" ] || continue
 
-        CURRENT="$(jq -r '.tag' "$FILE")"
-
-        if [ "$CURRENT" = "$TAG" ]; then
-
-            echo
-            echo "配置文件：$FILE"
-            echo
-            echo "当前配置："
-            jq . "$FILE"
-
-            echo
-            echo "请选择编辑方式："
-            echo "1. vi"
-            echo "2. sed/命令行自行修改"
-            echo
-
-            printf "选择 [1]: "
-            read E
-
-            case "$E" in
-                2)
-                    echo "文件：$FILE"
-                    ;;
-                *)
-                    vi "$FILE"
-                    ;;
-            esac
-
-            rebuild_config
-            start_service
-
-            return
+        if [ "$(jq -r '.tag' "$FILE")" = "$TAG" ]; then
+            FOUND=1
+            break
         fi
     done
 
-    echo "没有找到。"
+    if [ -z "$FOUND" ]; then
+        echo "没有找到。"
+        return
+    fi
+
+    if [ -x /usr/local/bin/sing-box-edit-config ]; then
+        /usr/local/bin/sing-box-edit-config "$TAG"
+    else
+        echo "交互编辑器未安装，请重新运行安装脚本，或使用 vi 直接编辑。"
+        for FILE in "$INBOUND_DIR"/*.json; do
+            [ -f "$FILE" ] || continue
+            if [ "$(jq -r '.tag' "$FILE")" = "$TAG" ]; then
+                vi "$FILE"
+                break
+            fi
+        done
+    fi
+
+    rebuild_config
+    start_service
 }
 
 # ==========================================================
@@ -1661,6 +1655,7 @@ uninstall_all() {
     rm -rf "$BASE"
     rm -f /usr/local/bin/lsb
     rm -f /usr/local/bin/singbox
+    rm -f /usr/local/bin/sing-box-edit-config
 
     echo
     echo "sing-box 已卸载。"
@@ -1836,6 +1831,210 @@ EOF
 
     chmod 755 /usr/local/bin/singbox
 
+    cat > /usr/local/bin/sing-box-edit-config <<'EOF'
+#!/bin/sh
+
+BASE="/etc/sing-box"
+INBOUND_DIR="$BASE/inbounds"
+
+TAG="$1"
+
+[ -n "$TAG" ] || exit 1
+
+FILE=""
+
+for F in "$INBOUND_DIR"/*.json; do
+
+    [ -f "$F" ] || continue
+
+    if [ "$(jq -r '.tag' "$F")" = "$TAG" ]; then
+        FILE="$F"
+        break
+    fi
+done
+
+[ -n "$FILE" ] || {
+    echo "没有找到该配置。"
+    exit 1
+}
+
+set_info() {
+
+    KEY="${2%%=*}"
+    INFOFILE="$BASE/info/$1"
+
+    mkdir -p "$BASE/info"
+
+    if [ -f "$INFOFILE" ] && grep -q "^$KEY=" "$INFOFILE"; then
+        sed -i "s|^$KEY=.*|$2|" "$INFOFILE"
+    else
+        printf '%s\n' "$2" >> "$INFOFILE"
+    fi
+}
+
+TYPE="$(jq -r '.type' "$FILE")"
+
+while :; do
+
+    echo
+    echo "=========================================="
+    echo " 修改配置：$TAG（$TYPE）"
+    echo "=========================================="
+
+    PORT="$(jq -r '.listen_port' "$FILE")"
+    UUID="$(jq -r '.users[0].uuid // empty' "$FILE")"
+    PASS="$(jq -r '.users[0].password // .password // empty' "$FILE")"
+    SNI="$(jq -r '.tls.server_name // empty' "$FILE")"
+    PRIV="$(jq -r '.tls.reality.private_key // empty' "$FILE")"
+    SID="$(jq -r '.tls.reality.short_id | if type == "array" then .[0] else . end' "$FILE")"
+
+    echo
+    echo "  端口      : $PORT"
+    [ -n "$UUID" ] && echo "  UUID      : $UUID"
+    [ -n "$PASS" ] && echo "  密码      : $PASS"
+    [ -n "$SNI" ] && echo "  SNI       : $SNI"
+    [ -n "$PRIV" ] && echo "  PrivateKey: $PRIV"
+    [ -n "$SID" ] && echo "  ShortID   : $SID"
+
+    echo
+    echo "可修改字段："
+    echo "1. 端口"
+
+    if [ "$TYPE" = "vless" ] || [ "$TYPE" = "tuic" ]; then
+        echo "2. UUID"
+    fi
+
+    case "$TYPE" in
+        anytls|anyreality|hysteria2|shadowsocks|tuic)
+            echo "3. 密码"
+            ;;
+    esac
+
+    case "$TYPE" in
+        vless|anytls|anyreality|hysteria2|tuic)
+            echo "4. SNI"
+            ;;
+    esac
+
+    if [ "$TYPE" = "vless" ] || [ "$TYPE" = "anyreality" ]; then
+        echo "5. REALITY 私钥 + 公钥"
+        echo "6. ShortID"
+    fi
+
+    echo "0. 完成并应用"
+    echo
+    printf "请选择 [0]: "
+    read CH
+
+    case "$CH" in
+
+        1)
+            printf "新端口 [$PORT]: "
+            read NEW
+            [ -n "$NEW" ] || continue
+            jq --arg v "$NEW" '.listen_port = ($v | tonumber)' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
+            mv "$FILE.tmp" "$FILE"
+            set_info "$TAG" "PORT=$NEW"
+            ;;
+
+        2)
+            if [ "$TYPE" = "vless" ] || [ "$TYPE" = "tuic" ]; then
+                printf "新 UUID [$UUID]: "
+                read NEW
+                [ -n "$NEW" ] || continue
+                jq --arg v "$NEW" '.users[0].uuid = $v' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
+                mv "$FILE.tmp" "$FILE"
+                set_info "$TAG" "UUID=$NEW"
+            fi
+            ;;
+
+        3)
+            case "$TYPE" in
+                shadowsocks)
+                    printf "新密码 [$PASS]: "
+                    read NEW
+                    [ -n "$NEW" ] || continue
+                    jq --arg v "$NEW" '.password = $v' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
+                    mv "$FILE.tmp" "$FILE"
+                    set_info "$TAG" "PASSWORD=$NEW"
+                    ;;
+                anytls|anyreality|hysteria2|tuic)
+                    printf "新密码 [$PASS]: "
+                    read NEW
+                    [ -n "$NEW" ] || continue
+                    jq --arg v "$NEW" '.users[0].password = $v' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
+                    mv "$FILE.tmp" "$FILE"
+                    set_info "$TAG" "PASSWORD=$NEW"
+                    ;;
+            esac
+            ;;
+
+        4)
+            case "$TYPE" in
+                vless|anytls|anyreality|hysteria2|tuic)
+                    printf "新 SNI [$SNI]: "
+                    read NEW
+                    [ -n "$NEW" ] || continue
+                    jq --arg v "$NEW" '
+                        .tls.server_name = $v |
+                        if .tls.reality then .tls.reality.handshake.server = $v else . end
+                    ' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
+                    mv "$FILE.tmp" "$FILE"
+                    set_info "$TAG" "SNI=$NEW"
+                    ;;
+            esac
+            ;;
+
+        5)
+            if [ "$TYPE" = "vless" ] || [ "$TYPE" = "anyreality" ]; then
+                echo
+                echo "提示：先用 sing-box generate reality-keypair 生成新密钥对，"
+                echo "然后分别输入私钥和公钥。"
+                echo
+                printf "新 PrivateKey："
+                read NEWPK
+                [ -n "$NEWPK" ] || continue
+                printf "对应的 PublicKey："
+                read NEWPBK
+                [ -n "$NEWPBK" ] || continue
+                jq --arg v "$NEWPK" '.tls.reality.private_key = $v' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
+                mv "$FILE.tmp" "$FILE"
+                set_info "$TAG" "PUBLIC_KEY=$NEWPBK"
+            fi
+            ;;
+
+        6)
+            if [ "$TYPE" = "vless" ] || [ "$TYPE" = "anyreality" ]; then
+                printf "新 ShortID [$SID]: "
+                read NEW
+                [ -n "$NEW" ] || continue
+                if [ "$TYPE" = "vless" ]; then
+                    jq --arg v "$NEW" '.tls.reality.short_id = [$v]' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
+                else
+                    jq --arg v "$NEW" '.tls.reality.short_id = $v' "$FILE" > "$FILE.tmp" 2>/dev/null || continue
+                fi
+                mv "$FILE.tmp" "$FILE"
+                set_info "$TAG" "SHORT_ID=$NEW"
+            fi
+            ;;
+
+        0|"")
+            break
+            ;;
+
+        *)
+            echo "无效选项。"
+            ;;
+    esac
+done
+
+echo
+echo "配置已更新：$TAG"
+exit 0
+EOF
+
+    chmod 755 /usr/local/bin/sing-box-edit-config
+
     cat > /usr/local/bin/sing-box-manager <<'EOF'
 #!/bin/sh
 
@@ -2004,18 +2203,12 @@ edit_config() {
     printf "Tag："
     read TAG
 
-    FILE="$BASE/inbounds/$TAG.json"
+    [ -n "$TAG" ] || return
 
-    if [ -f "$FILE" ]; then
-
-        vi "$FILE"
-
+    /usr/local/bin/sing-box-edit-config "$TAG" && {
         rebuild
         service_restart
-
-    else
-        echo "不存在。"
-    fi
+    }
 }
 
 show_links() {
@@ -2159,6 +2352,7 @@ while :; do
                 rm -f /usr/local/bin/sing-box
                 rm -f /usr/local/bin/lsb
                 rm -f /usr/local/bin/singbox
+                rm -f /usr/local/bin/sing-box-edit-config
                 rm -f /usr/local/bin/sing-box-manager
                 rm -rf "$BASE"
 
