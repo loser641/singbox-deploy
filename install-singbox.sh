@@ -33,6 +33,8 @@
 
 set -u
 
+SCRIPT_VERSION="2026.08.26"
+
 BIN="/usr/local/bin/sing-box"
 BASE="/etc/sing-box"
 INBOUND_DIR="$BASE/inbounds"
@@ -597,6 +599,8 @@ EOF
         "SNI=$SNI" \
         "PORT=$PORT"
 
+    append_order "$(basename "$FILE")"
+
     echo "VLESS REALITY 已添加。"
 }
 
@@ -670,6 +674,8 @@ EOF
         "SNI=$SNI" \
         "PORT=$PORT"
 
+    append_order "$(basename "$FILE")"
+
     echo "VLESS REALITY 免流已添加。"
 }
 
@@ -726,6 +732,8 @@ EOF
         "PASSWORD=$PASSWORD" \
         "PORT=$PORT"
 
+    append_order "$(basename "$FILE")"
+
     echo "TUIC 已添加。"
 }
 
@@ -774,6 +782,8 @@ EOF
     save_info "$TAG" \
         "PASSWORD=$PASSWORD" \
         "PORT=$PORT"
+
+    append_order "$(basename "$FILE")"
 
     echo "AnyTLS 已添加。"
 }
@@ -842,6 +852,8 @@ EOF
         "METHOD=$METHOD" \
         "PASSWORD=$PASSWORD" \
         "PORT=$PORT"
+
+    append_order "$(basename "$FILE")"
 
     echo "Shadowsocks 已添加。"
 }
@@ -914,6 +926,8 @@ EOF
         "UP=$UP" \
         "DOWN=$DOWN"
 
+    append_order "$(basename "$FILE")"
+
     echo "Hysteria2 已添加。"
 }
 
@@ -939,6 +953,49 @@ save_info() {
     done
 
     chmod 600 "$FILE"
+}
+
+append_order() {
+
+    ORDER="$BASE/order"
+
+    [ -f "$ORDER" ] || : > "$ORDER"
+
+    if ! grep -qxF "$1" "$ORDER"; then
+        printf '%s\n' "$1" >> "$ORDER"
+    fi
+}
+
+ensure_order() {
+
+    ORDER="$BASE/order"
+    TMPO="$BASE/order.tmp"
+
+    : > "$TMPO"
+
+    if [ -f "$ORDER" ]; then
+
+        while IFS= read -r FNAME; do
+
+            [ -n "$FNAME" ] || continue
+
+            [ -f "$INBOUND_DIR/$FNAME" ] || continue
+
+            grep -qxF "$FNAME" "$TMPO" || printf '%s\n' "$FNAME" >> "$TMPO"
+
+        done < "$ORDER"
+    fi
+
+    for F in "$INBOUND_DIR"/*.json; do
+
+        [ -f "$F" ] || continue
+
+        FNAME="$(basename "$F")"
+
+        grep -qxF "$FNAME" "$TMPO" || printf '%s\n' "$FNAME" >> "$TMPO"
+    done
+
+    mv "$TMPO" "$ORDER"
 }
 
 # ==========================================================
@@ -1049,6 +1106,8 @@ EOF
         "PUBLIC_KEY=$PUBLIC_KEY" \
         "SHORT_ID=$SHORT_ID"
 
+    append_order "$(basename "$FILE")"
+
     echo
     echo "AnyReality 已添加。"
     echo "客户端 PublicKey：$PUBLIC_KEY"
@@ -1061,6 +1120,8 @@ EOF
 rebuild_config() {
 
     mkdir -p "$INBOUND_DIR"
+
+    ensure_order
 
     TMP="$BASE/config.tmp.json"
     INLIST="$BASE/inbounds.list.json"
@@ -1223,19 +1284,50 @@ list_configs() {
     echo "=========================================="
 
     found=0
+    n=0
+
+    if [ -f "$BASE/order" ]; then
+
+        while IFS= read -r FNAME; do
+
+            [ -n "$FNAME" ] || continue
+
+            FILE="$INBOUND_DIR/$FNAME"
+
+            [ -f "$FILE" ] || continue
+
+            found=1
+            n=$((n+1))
+
+            TAG="$(jq -r '.tag' "$FILE")"
+            TYPE="$(jq -r '.type' "$FILE")"
+            PORT="$(jq -r '.listen_port' "$FILE")"
+
+            printf "%d.%s | %s | port=%s\n" \
+                "$n" "$TAG" "$TYPE" "$PORT"
+
+        done < "$BASE/order"
+    fi
 
     for FILE in "$INBOUND_DIR"/*.json; do
 
         [ -f "$FILE" ] || continue
 
+        FNAME="$(basename "$FILE")"
+
+        if [ -f "$BASE/order" ] && grep -qxF "$FNAME" "$BASE/order"; then
+            continue
+        fi
+
         found=1
+        n=$((n+1))
 
         TAG="$(jq -r '.tag' "$FILE")"
         TYPE="$(jq -r '.type' "$FILE")"
         PORT="$(jq -r '.listen_port' "$FILE")"
 
-        printf "%-24s %-15s %s\n" \
-            "$TAG" "$TYPE" "$PORT"
+        printf "%d.%s | %s | port=%s\n" \
+            "$n" "$TAG" "$TYPE" "$PORT"
     done
 
     [ "$found" = "1" ] || echo "暂无配置。"
@@ -1341,6 +1433,10 @@ delete_config() {
 
             rm -f "$FILE"
             rm -f "$BASE/info/$TAG"
+
+            if [ -f "$BASE/order" ]; then
+                sed -i "\|^$(basename "$FILE")$|d" "$BASE/order"
+            fi
 
             echo "已删除：$TAG"
 
@@ -2057,14 +2153,40 @@ list_configs() {
     echo "当前配置："
 
     found=0
+    n=0
+
+    if [ -f "$BASE/order" ]; then
+
+        while IFS= read -r FNAME; do
+
+            [ -n "$FNAME" ] || continue
+
+            FILE="$BASE/inbounds/$FNAME"
+
+            [ -f "$FILE" ] || continue
+
+            found=1
+            n=$((n+1))
+
+            jq -r --arg n "$n" '"\($n).\(.tag) | \(.type) | port=\(.listen_port)"' "$FILE"
+
+        done < "$BASE/order"
+    fi
 
     for FILE in "$BASE/inbounds"/*.json; do
 
         [ -f "$FILE" ] || continue
 
-        found=1
+        FNAME="$(basename "$FILE")"
 
-        jq -r '"  \(.tag) | \(.type) | port=\(.listen_port)"' "$FILE"
+        if [ -f "$BASE/order" ] && grep -qxF "$FNAME" "$BASE/order"; then
+            continue
+        fi
+
+        found=1
+        n=$((n+1))
+
+        jq -r --arg n "$n" '"\($n).\(.tag) | \(.type) | port=\(.listen_port)"' "$FILE"
     done
 
     [ "$found" = "1" ] || echo "  暂无"
@@ -2113,7 +2235,41 @@ service_status() {
     fi
 }
 
+ensure_order() {
+
+    ORDER="$BASE/order"
+    TMPO="$BASE/order.tmp"
+
+    : > "$TMPO"
+
+    if [ -f "$ORDER" ]; then
+
+        while IFS= read -r FNAME; do
+
+            [ -n "$FNAME" ] || continue
+
+            [ -f "$BASE/inbounds/$FNAME" ] || continue
+
+            grep -qxF "$FNAME" "$TMPO" || printf '%s\n' "$FNAME" >> "$TMPO"
+
+        done < "$ORDER"
+    fi
+
+    for F in "$BASE/inbounds"/*.json; do
+
+        [ -f "$F" ] || continue
+
+        FNAME="$(basename "$F")"
+
+        grep -qxF "$FNAME" "$TMPO" || printf '%s\n' "$FNAME" >> "$TMPO"
+    done
+
+    mv "$TMPO" "$ORDER"
+}
+
 rebuild() {
+
+    ensure_order
 
     INLIST="$BASE/inbounds.list.json"
 
@@ -2157,16 +2313,50 @@ view_config() {
     list_configs
 
     echo
-    printf "Tag："
-    read TAG
+    printf "输入编号："
+    read NUM
 
-    FILE="$BASE/inbounds/$TAG.json"
+    n=0
 
-    if [ -f "$FILE" ]; then
-        jq . "$FILE"
-    else
-        echo "不存在。"
+    if [ -f "$BASE/order" ]; then
+
+        while IFS= read -r FNAME; do
+
+            [ -n "$FNAME" ] || continue
+
+            FILE="$BASE/inbounds/$FNAME"
+
+            [ -f "$FILE" ] || continue
+
+            n=$((n+1))
+
+            if [ "$n" = "$NUM" ]; then
+                jq . "$FILE"
+                return
+            fi
+
+        done < "$BASE/order"
     fi
+
+    for FILE in "$BASE/inbounds"/*.json; do
+
+        [ -f "$FILE" ] || continue
+
+        FNAME="$(basename "$FILE")"
+
+        if [ -f "$BASE/order" ] && grep -qxF "$FNAME" "$BASE/order"; then
+            continue
+        fi
+
+        n=$((n+1))
+
+        if [ "$n" = "$NUM" ]; then
+            jq . "$FILE"
+            return
+        fi
+    done
+
+    echo "没有找到。"
 }
 
 delete_config() {
@@ -2177,13 +2367,29 @@ delete_config() {
     printf "删除 Tag："
     read TAG
 
-    FILE="$BASE/inbounds/$TAG.json"
+    [ -n "$TAG" ] || return
+
+    FILE=""
+
+    for F in "$BASE/inbounds"/*.json; do
+        [ -f "$F" ] || continue
+        if [ "$(jq -r '.tag' "$F")" = "$TAG" ]; then
+            FILE="$F"
+            break
+        fi
+    done
 
     if [ -f "$FILE" ]; then
 
         rm -f "$FILE"
         rm -f "$BASE/info/$TAG"
         rm -f "$BASE/links/$TAG.txt"
+
+        FNAME="$(basename "$FILE")"
+
+        if [ -f "$BASE/order" ]; then
+            sed -i "\|^$FNAME$|d" "$BASE/order"
+        fi
 
         rebuild
         service_restart
@@ -2250,6 +2456,149 @@ show_links() {
     done
 }
 
+check_updates() {
+
+    HINT="$BASE/update-hint"
+    LAST="$BASE/.last-update-check"
+
+    NOW="$(date +%s 2>/dev/null || echo 0)"
+
+    if [ -f "$LAST" ] && [ "$NOW" -gt 0 ]; then
+        OLD="$(cat "$LAST" 2>/dev/null || echo 0)"
+        if [ "$NOW" -lt $((OLD + 21600)) ]; then
+            cat "$HINT" 2>/dev/null
+            return
+        fi
+    fi
+
+    : > "$HINT"
+
+    LATEST_K="$(curl -fsSL --max-time 5 "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" 2>/dev/null | jq -r '[.[] | select(.prerelease == false)][0].tag_name' 2>/dev/null | tr -d 'v')"
+
+    CURRENT_K="$("$BIN" version 2>/dev/null | head -n 1 | awk '{print $3}')"
+
+    if [ -n "$LATEST_K" ] && [ -n "$CURRENT_K" ] && [ "$LATEST_K" != "$CURRENT_K" ]; then
+        echo "[!] sing-box 内核有新版本：$CURRENT_K -> $LATEST_K（选 14 更新）" >> "$HINT"
+    fi
+
+    REMOTE_SV="$(curl -fsSL --max-time 5 "https://raw.githubusercontent.com/loser641/singbox-deploy/main/install-singbox.sh" 2>/dev/null | sed -n 's/^SCRIPT_VERSION="\([^"]*\)".*/\1/p' | head -n 1)"
+
+    LOCAL_SV="$(cat "$BASE/script-version" 2>/dev/null)"
+
+    if [ -n "$REMOTE_SV" ] && [ -n "$LOCAL_SV" ] && [ "$REMOTE_SV" != "$LOCAL_SV" ]; then
+        echo "[!] 脚本有新版本：$LOCAL_SV -> $REMOTE_SV（选 14 更新）" >> "$HINT"
+    fi
+
+    printf '%s\n' "$NOW" > "$LAST"
+
+    cat "$HINT" 2>/dev/null
+}
+
+update_kernel() {
+
+    echo
+    echo "检查最新稳定版 sing-box..."
+
+    JSON="$(curl -fsSL --max-time 10 "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" 2>/dev/null)"
+
+    V="$(printf '%s' "$JSON" | jq -r '[.[] | select(.prerelease == false)][0].tag_name' 2>/dev/null | tr -d 'v')"
+
+    [ -n "$V" ] || {
+        echo "获取最新版本失败。"
+        return
+    }
+
+    ARCH="$(uname -m)"
+
+    case "$ARCH" in
+        x86_64|amd64) SB_ARCH="amd64" ;;
+        aarch64|arm64) SB_ARCH="arm64" ;;
+        armv7l|armv7) SB_ARCH="armv7" ;;
+        *) echo "不支持的架构：$ARCH"; return ;;
+    esac
+
+    if command -v apk >/dev/null 2>&1; then
+        LIBC="musl"
+    else
+        LIBC="glibc"
+    fi
+
+    if [ "$SB_ARCH" = "armv7" ]; then
+        FILE="sing-box-${V}-linux-armv7.tar.gz"
+    else
+        FILE="sing-box-${V}-linux-${SB_ARCH}-${LIBC}.tar.gz"
+    fi
+
+    URL="https://github.com/SagerNet/sing-box/releases/download/v${V}/${FILE}"
+
+    echo "[+] $URL"
+
+    TMP="/tmp/singbox-update"
+
+    rm -rf "$TMP"
+    mkdir -p "$TMP"
+
+    wget -q --show-progress "$URL" -O "$TMP/$FILE" || {
+        echo "下载失败。"
+        rm -rf "$TMP"
+        return
+    }
+
+    tar -xzf "$TMP/$FILE" -C "$TMP"
+
+    SB="$(find "$TMP" -type f -name sing-box | head -n 1)"
+
+    [ -n "$SB" ] || {
+        echo "解压失败。"
+        rm -rf "$TMP"
+        return
+    }
+
+    service_stop 2>/dev/null || true
+
+    install -m 755 "$SB" "$BIN"
+
+    rm -rf "$TMP"
+
+    rebuild
+
+    service_restart
+
+    echo
+    echo "sing-box 已更新到 $V"
+}
+
+update_menu() {
+
+    echo
+    echo "=========================================="
+    echo " 更新"
+    echo "=========================================="
+    echo
+    echo "1. 更新脚本"
+    echo "2. 更新 sing-box 内核"
+    echo "0. 返回"
+    echo
+    printf "请选择："
+    read U
+
+    case "$U" in
+        1)
+            echo "下载最新脚本..."
+            curl -fsSL --max-time 20 "https://raw.githubusercontent.com/loser641/singbox-deploy/main/install-singbox.sh" -o /usr/local/bin/install-singbox.sh || {
+                echo "下载失败。"
+                return
+            }
+            chmod +x /usr/local/bin/install-singbox.sh
+            sh /usr/local/bin/install-singbox.sh --update-components
+            echo "脚本已更新。"
+            ;;
+        2)
+            update_kernel
+            ;;
+    esac
+}
+
 while :; do
 
     clear
@@ -2262,6 +2611,10 @@ while :; do
 
     "$BIN" version 2>/dev/null | head -n 1
 
+    echo
+
+    check_updates
+
     list_configs
 
     echo
@@ -2270,17 +2623,17 @@ while :; do
     echo "3. 查看配置"
     echo "4. 删除配置"
     echo "5. 分享链接"
-    echo "6. 服务状态"
-    echo "7. 启动"
-    echo "8. 停止"
-    echo "9. 重启"
-    echo "10. 校验配置"
-    echo "11. 查看日志"
-    echo "12. DNS"
-    echo "13. BBR"
+    echo "6. 启动"
+    echo "7. 停止"
+    echo "8. 重启"
+    echo "9. 服务状态"
+    echo "10. DNS"
+    echo "11. BBR"
+    echo "12. 校验配置"
+    echo "13. 查看日志"
     echo "14. 更新"
     echo "15. 卸载"
-    echo "0. 退出"
+    echo "16. 退出"
 
     echo
     printf "请选择："
@@ -2314,44 +2667,32 @@ while :; do
             ;;
 
         6)
-            service_status
-            pause
-            ;;
-
-        7)
             service_start
             pause
             ;;
 
-        8)
+        7)
             service_stop
             pause
             ;;
 
-        9)
+        8)
             service_restart
             pause
             ;;
 
+        9)
+            service_status
+            pause
+            ;;
+
         10)
-            "$BIN" check -c "$BASE/config.json"
-            pause
-            ;;
-
-        11)
-            if command -v journalctl >/dev/null 2>&1; then
-                journalctl -u sing-box --no-pager -n 100
-            fi
-            pause
-            ;;
-
-        12)
             echo "DNS 配置文件：$BASE/dns.json"
             cat "$BASE/dns.json" 2>/dev/null
             pause
             ;;
 
-        13)
+        11)
             echo "Current:"
             cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null
             echo
@@ -2360,8 +2701,20 @@ while :; do
             pause
             ;;
 
+        12)
+            "$BIN" check -c "$BASE/config.json"
+            pause
+            ;;
+
+        13)
+            if command -v journalctl >/dev/null 2>&1; then
+                journalctl -u sing-box --no-pager -n 100
+            fi
+            pause
+            ;;
+
         14)
-            echo "请重新运行安装脚本进行更新。"
+            update_menu
             pause
             ;;
 
@@ -2392,7 +2745,7 @@ while :; do
             fi
             ;;
 
-        0)
+        16)
             exit 0
             ;;
 
@@ -2401,6 +2754,8 @@ done
 EOF
 
     chmod 755 /usr/local/bin/sing-box-manager
+
+    printf '%s\n' "$SCRIPT_VERSION" > "$BASE/script-version"
 }
 
 # ==========================================================
@@ -2732,6 +3087,14 @@ initial_setup() {
 # ==========================================================
 
 main() {
+
+    if [ "${1:-}" = "--update-components" ]; then
+        install_link_generator
+        install_lsb
+        printf '%s\n' "$SCRIPT_VERSION" > "$BASE/script-version"
+        echo "组件已更新。"
+        exit 0
+    fi
 
     clear 2>/dev/null || true
 
