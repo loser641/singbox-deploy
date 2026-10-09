@@ -84,6 +84,22 @@ ask_yes_no() {
     esac
 }
 
+work_dir() {
+    # /tmp 在小内存机器上是 tmpfs（内存盘），大文件放进去会触发 OOM 杀掉 SSH 会话
+    for d in /var/tmp /root /usr/local/src; do
+        mkdir -p "$d" 2>/dev/null || continue
+        case "$(df -P "$d" 2>/dev/null | tail -n 1 | awk '{print $1}')" in
+            tmpfs*) ;;
+            *)
+                echo "$d/$1"
+                return 0
+                ;;
+        esac
+    done
+
+    echo "/root/$1"
+}
+
 # ==========================================================
 # Detect OS
 # ==========================================================
@@ -257,19 +273,18 @@ install_singbox() {
 
     URL="https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/${FILE}"
 
-    TMP="/tmp/singbox-install"
+    TMP="$(work_dir singbox-install)"
 
     rm -rf "$TMP"
     mkdir -p "$TMP"
 
     echo "[+] $URL"
 
-    wget -q --show-progress "$URL" -O "$TMP/$FILE" || {
-        echo "下载失败。"
+    wget -q --show-progress "$URL" -O- | tar -xzf - -C "$TMP" || {
+        echo "下载或解压失败。"
+        rm -rf "$TMP"
         exit 1
     }
-
-    tar -xzf "$TMP/$FILE" -C "$TMP"
 
     SB="$(find "$TMP" -type f -name sing-box | head -n 1)"
 
@@ -1261,7 +1276,7 @@ install_service() {
         # Alpine 64MB 内存下 OpenRC 容易出问题，改用 crontab 开机自启（参考部署指南 2.5）
         rm -f /etc/init.d/sing-box
 
-        CRON_LINE="@reboot $BIN run -c $CONFIG > /dev/null 2>&1 &"
+        CRON_LINE="@reboot GOMEMLIMIT=48MiB $BIN run -c $CONFIG > /dev/null 2>&1 &"
 
         (
             crontab -l 2>/dev/null | grep -v '@reboot.*sing-box run' || true
@@ -1298,7 +1313,7 @@ start_service() {
     if [ "$OS_ID" = "alpine" ]; then
         pkill -x sing-box 2>/dev/null || true
         sleep 1
-        nohup "$BIN" run -c "$CONFIG" > /dev/null 2>&1 &
+        GOMEMLIMIT=48MiB nohup "$BIN" run -c "$CONFIG" > /dev/null 2>&1 &
         sleep 1
     else
         systemctl restart sing-box
@@ -2376,7 +2391,7 @@ service_start() {
     if command -v systemctl >/dev/null 2>&1; then
         systemctl start sing-box
     else
-        nohup /usr/local/bin/sing-box run -c /etc/sing-box/config.json > /dev/null 2>&1 &
+        GOMEMLIMIT=48MiB nohup /usr/local/bin/sing-box run -c /etc/sing-box/config.json > /dev/null 2>&1 &
     fi
 }
 
@@ -2396,7 +2411,7 @@ service_restart() {
     else
         pkill -x sing-box 2>/dev/null || true
         sleep 1
-        nohup /usr/local/bin/sing-box run -c /etc/sing-box/config.json > /dev/null 2>&1 &
+        GOMEMLIMIT=48MiB nohup /usr/local/bin/sing-box run -c /etc/sing-box/config.json > /dev/null 2>&1 &
     fi
 }
 
@@ -2718,18 +2733,16 @@ update_kernel() {
 
     echo "[+] $URL"
 
-    TMP="/tmp/singbox-update"
+    TMP="$(work_dir singbox-update)"
 
     rm -rf "$TMP"
     mkdir -p "$TMP"
 
-    wget -q --show-progress "$URL" -O "$TMP/$FILE" || {
-        echo "下载失败。"
+    wget -q --show-progress "$URL" -O- | tar -xzf - -C "$TMP" || {
+        echo "下载或解压失败。"
         rm -rf "$TMP"
         return
     }
-
-    tar -xzf "$TMP/$FILE" -C "$TMP"
 
     SB="$(find "$TMP" -type f -name sing-box | head -n 1)"
 
