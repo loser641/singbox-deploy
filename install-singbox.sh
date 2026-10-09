@@ -51,6 +51,9 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
+# 限制 Go 堆内存，避免小内存机器上 sing-box 启动/运行时触发 OOM
+export GOMEMLIMIT=48MiB
+
 # ==========================================================
 # Common
 # ==========================================================
@@ -98,6 +101,15 @@ work_dir() {
     done
 
     echo "/root/$1"
+}
+
+rate_opt() {
+    # 内存不足 256MB 时限速，压住解压写入的脏页尖峰，避免 OOM
+    AVAIL_KB="$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+
+    if [ "${AVAIL_KB:-0}" -lt 262144 ] 2>/dev/null; then
+        echo "--limit-rate=1m"
+    fi
 }
 
 # ==========================================================
@@ -275,12 +287,26 @@ install_singbox() {
 
     TMP="$(work_dir singbox-install)"
 
-    rm -rf "$TMP"
-    mkdir -p "$TMP"
-
     echo "[+] $URL"
 
-    wget -q --show-progress "$URL" -O- | tar -xzf - -C "$TMP" || {
+    OK=""
+    TRY=0
+
+    while [ -z "$OK" ] && [ "$TRY" -lt 3 ]; do
+        TRY=$((TRY+1))
+
+        rm -rf "$TMP"
+        mkdir -p "$TMP"
+
+        if wget -q --show-progress $(rate_opt) "$URL" -O- | tar -xzf - -C "$TMP"; then
+            OK=1
+        else
+            echo "下载或解压失败，重试 $TRY/3 ..."
+            sleep 3
+        fi
+    done
+
+    [ -n "$OK" ] || {
         echo "下载或解压失败。"
         rm -rf "$TMP"
         exit 1
@@ -293,7 +319,9 @@ install_singbox() {
         exit 1
     }
 
-    install -m 755 "$SB" "$BIN"
+    mv "$SB" "$BIN"
+    chown 0:0 "$BIN" 2>/dev/null || true
+    chmod 755 "$BIN"
 
     rm -rf "$TMP"
 
@@ -2275,6 +2303,9 @@ EOF
 BASE="/etc/sing-box"
 BIN="/usr/local/bin/sing-box"
 
+# 限制 Go 堆内存，避免小内存机器上 sing-box 启动/运行时触发 OOM
+export GOMEMLIMIT=48MiB
+
 random_port() {
     awk 'BEGIN{srand(); print int(20000+rand()*40000)}'
 }
@@ -2294,6 +2325,31 @@ ask_yes_no() {
         [yY]|[yY][eE][sS]) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+work_dir() {
+    # /tmp 在小内存机器上是 tmpfs（内存盘），大文件放进去会触发 OOM 杀掉 SSH 会话
+    for d in /var/tmp /root /usr/local/src; do
+        mkdir -p "$d" 2>/dev/null || continue
+        case "$(df -P "$d" 2>/dev/null | tail -n 1 | awk '{print $1}')" in
+            tmpfs*) ;;
+            *)
+                echo "$d/$1"
+                return 0
+                ;;
+        esac
+    done
+
+    echo "/root/$1"
+}
+
+rate_opt() {
+    # 内存不足 256MB 时限速，压住解压写入的脏页尖峰，避免 OOM
+    AVAIL_KB="$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+
+    if [ "${AVAIL_KB:-0}" -lt 262144 ] 2>/dev/null; then
+        echo "--limit-rate=1m"
+    fi
 }
 
 list_configs() {
@@ -2735,10 +2791,24 @@ update_kernel() {
 
     TMP="$(work_dir singbox-update)"
 
-    rm -rf "$TMP"
-    mkdir -p "$TMP"
+    OK=""
+    TRY=0
 
-    wget -q --show-progress "$URL" -O- | tar -xzf - -C "$TMP" || {
+    while [ -z "$OK" ] && [ "$TRY" -lt 3 ]; do
+        TRY=$((TRY+1))
+
+        rm -rf "$TMP"
+        mkdir -p "$TMP"
+
+        if wget -q --show-progress $(rate_opt) "$URL" -O- | tar -xzf - -C "$TMP"; then
+            OK=1
+        else
+            echo "下载或解压失败，重试 $TRY/3 ..."
+            sleep 3
+        fi
+    done
+
+    [ -n "$OK" ] || {
         echo "下载或解压失败。"
         rm -rf "$TMP"
         return
@@ -2754,7 +2824,9 @@ update_kernel() {
 
     service_stop 2>/dev/null || true
 
-    install -m 755 "$SB" "$BIN"
+    mv "$SB" "$BIN"
+    chown 0:0 "$BIN" 2>/dev/null || true
+    chmod 755 "$BIN"
 
     rm -rf "$TMP"
 
