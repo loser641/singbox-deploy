@@ -192,6 +192,7 @@ install_dependencies() {
             jq \
             procps \
             coreutils \
+            openssl \
             >/dev/null 2>&1
 
     else
@@ -210,6 +211,7 @@ install_dependencies() {
             jq \
             procps \
             coreutils \
+            openssl \
             >/dev/null 2>&1
     fi
 }
@@ -388,6 +390,11 @@ EOF
         -config "$CERT_DIR/openssl.cnf" \
         >/dev/null 2>&1
 
+    if [ ! -s "$KEY" ] || [ ! -s "$CRT" ]; then
+        echo "证书生成失败（openssl 不可用或执行出错）。"
+        return 1
+    fi
+
     chmod 600 "$KEY"
     chmod 644 "$CRT"
 
@@ -423,6 +430,11 @@ ensure_certificate() {
             apt-get install -y openssl >/dev/null 2>&1
         fi
     fi
+
+    command_exists openssl || {
+        echo "openssl 安装失败，无法生成 TLS 证书。"
+        return 1
+    }
 
     generate_certificate
 }
@@ -745,7 +757,7 @@ add_tuic() {
     TAG="tuic"
     FILE="$INBOUND_DIR/${TAG}.json"
 
-    ensure_certificate
+    ensure_certificate || return 1
 
     UUID="$(generate_uuid)"
     PASSWORD="$(random_password)"
@@ -803,7 +815,7 @@ add_anytls() {
     TAG="anytls"
     FILE="$INBOUND_DIR/${TAG}.json"
 
-    ensure_certificate
+    ensure_certificate || return 1
 
     PASSWORD="$(random_password)"
     PORT="$(random_port)"
@@ -924,7 +936,7 @@ add_hysteria2() {
     TAG="hysteria2"
     FILE="$INBOUND_DIR/${TAG}.json"
 
-    ensure_certificate
+    ensure_certificate || return 1
 
     PASSWORD="$(random_password)"
     PORT="$(random_port)"
