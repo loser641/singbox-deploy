@@ -1867,6 +1867,16 @@ show_links() {
         cat "$FILE"
         echo
     done
+
+    if [ -f "$CERT_DIR/www.bing.com.crt" ]; then
+
+        echo
+        echo "===== TLS 固定证书（可选，替代跳过证书验证）====="
+        echo "v2rayN：节点设置 → 固定证书 → 获取证书（或粘贴下方 PEM）"
+        echo "设置后会自动禁用跳过证书验证，SNI 保持 www.bing.com 不变："
+        echo
+        cat "$CERT_DIR/www.bing.com.crt"
+    fi
 }
 
 # ==========================================================
@@ -2814,6 +2824,16 @@ show_links() {
         echo "===== $(basename "$FILE") ====="
         cat "$FILE"
     done
+
+    if [ -f "$BASE/cert/www.bing.com.crt" ]; then
+
+        echo
+        echo "===== TLS 固定证书（可选，替代跳过证书验证）====="
+        echo "v2rayN：节点设置 → 固定证书 → 获取证书（或粘贴下方 PEM）"
+        echo "设置后会自动禁用跳过证书验证，SNI 保持 www.bing.com 不变："
+        echo
+        cat "$BASE/cert/www.bing.com.crt"
+    fi
 }
 
 check_updates() {
