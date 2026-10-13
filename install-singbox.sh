@@ -355,7 +355,34 @@ generate_certificate() {
     echo " 生成 100 年自签名 TLS 证书"
     echo "=========================================="
 
-    cat > "$CERT_DIR/openssl.cnf" <<EOF
+    # 优先使用证书服务（Cloudflare Worker 生成，无需安装 openssl）
+    CERT_SERVICE="https://ssl.641666.xyz/generate"
+
+    CERT_JSON="$(curl -fsSL --max-time 30 "$CERT_SERVICE" 2>/dev/null || true)"
+
+    if [ -n "$CERT_JSON" ]; then
+        printf '%s' "$CERT_JSON" | jq -r '.certificate_pem // empty' > "$CRT" 2>/dev/null
+        printf '%s' "$CERT_JSON" | jq -r '.private_key_pem // empty' > "$KEY" 2>/dev/null
+    fi
+
+    if [ ! -s "$KEY" ] || [ ! -s "$CRT" ]; then
+
+        echo "[+] 证书服务不可用，回退 openssl 本地生成。"
+
+        command_exists openssl || {
+            if [ "$OS_ID" = "alpine" ]; then
+                apk add openssl >/dev/null 2>&1
+            else
+                DEBIAN_FRONTEND=noninteractive apt-get install -y openssl >/dev/null 2>&1
+            fi
+        }
+
+        command_exists openssl || {
+            echo "证书服务不可用且 openssl 安装失败。"
+            return 1
+        }
+
+        cat > "$CERT_DIR/openssl.cnf" <<EOF
 [req]
 distinguished_name = req_distinguished_name
 x509_extensions = v3_req
@@ -379,19 +406,20 @@ extendedKeyUsage = serverAuth
 DNS.1 = www.bing.com
 EOF
 
-    openssl req \
-        -x509 \
-        -nodes \
-        -newkey rsa:2048 \
-        -sha256 \
-        -days 36500 \
-        -keyout "$KEY" \
-        -out "$CRT" \
-        -config "$CERT_DIR/openssl.cnf" \
-        >/dev/null 2>&1
+        openssl req \
+            -x509 \
+            -nodes \
+            -newkey rsa:2048 \
+            -sha256 \
+            -days 36500 \
+            -keyout "$KEY" \
+            -out "$CRT" \
+            -config "$CERT_DIR/openssl.cnf" \
+            >/dev/null 2>&1
+    fi
 
     if [ ! -s "$KEY" ] || [ ! -s "$CRT" ]; then
-        echo "证书生成失败（openssl 不可用或执行出错）。"
+        echo "证书生成失败。"
         return 1
     fi
 
@@ -407,7 +435,7 @@ EOF
         -noout \
         -subject \
         -issuer \
-        -dates
+        -dates 2>/dev/null || echo "(证书已生成，如需查看详情请安装 openssl)"
 }
 
 # ==========================================================
@@ -419,22 +447,6 @@ ensure_certificate() {
     if [ -f "$CERT_DIR/www.bing.com.crt" ] && [ -f "$CERT_DIR/www.bing.com.key" ]; then
         return
     fi
-
-    if ! command_exists openssl; then
-
-        echo "[+] 安装 openssl（仅用于生成证书）..."
-
-        if [ "$OS_ID" = "alpine" ]; then
-            apk add openssl >/dev/null 2>&1
-        else
-            apt-get install -y openssl >/dev/null 2>&1
-        fi
-    fi
-
-    command_exists openssl || {
-        echo "openssl 安装失败，无法生成 TLS 证书。"
-        return 1
-    }
 
     generate_certificate
 }
