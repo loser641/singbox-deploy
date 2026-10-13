@@ -2560,22 +2560,46 @@ rebuild() {
         return 1
     fi
 
-    jq -n \
-        --slurpfile in "$INLIST" \
-        '{
-            log: {
-                level: "warn",
-                output: "/dev/null",
-                timestamp: true
-            },
-            inbounds: $in[0],
-            outbounds: [
-                {
-                    type: "direct",
-                    tag: "direct"
-                }
-            ]
-        }' > "$BASE/config.json"
+    if [ -f "$BASE/dns.json" ]; then
+
+        jq -n \
+            --slurpfile dns "$BASE/dns.json" \
+            --slurpfile in "$INLIST" \
+            '{
+                log: {
+                    level: "warn",
+                    output: "/dev/null",
+                    timestamp: true
+                },
+                dns: $dns[0].dns,
+                inbounds: $in[0],
+                outbounds: [
+                    {
+                        type: "direct",
+                        tag: "direct"
+                    }
+                ]
+            }' > "$BASE/config.json"
+
+    else
+
+        jq -n \
+            --slurpfile in "$INLIST" \
+            '{
+                log: {
+                    level: "warn",
+                    output: "/dev/null",
+                    timestamp: true
+                },
+                inbounds: $in[0],
+                outbounds: [
+                    {
+                        type: "direct",
+                        tag: "direct"
+                    }
+                ]
+            }' > "$BASE/config.json"
+    fi
 
     rm -f "$INLIST"
 
@@ -2858,6 +2882,8 @@ update_kernel() {
 
     service_restart
 
+    rm -f "$BASE/update-hint" "$BASE/.last-update-check"
+
     echo
     echo "sing-box 已更新到 $V"
 }
@@ -2992,6 +3018,58 @@ while :; do
         10)
             echo "DNS 配置文件：$BASE/dns.json"
             cat "$BASE/dns.json" 2>/dev/null
+            echo
+            echo "默认：1.1.1.1"
+            printf "输入新 DNS（可逗号分隔），留空取消："
+            read DNS_INPUT
+
+            if [ -n "$DNS_INPUT" ]; then
+
+                DNS1="$(printf '%s' "$DNS_INPUT" | cut -d',' -f1)"
+                DNS2="$(printf '%s' "$DNS_INPUT" | cut -d',' -f2)"
+
+                if [ -n "$DNS2" ]; then
+
+                    cat > "$BASE/dns.json" <<DNSEOF
+{
+  "dns": {
+    "servers": [
+      {
+        "tag": "dns-1",
+        "address": "$DNS1"
+      },
+      {
+        "tag": "dns-2",
+        "address": "$DNS2"
+      }
+    ],
+    "final": "dns-1"
+  }
+}
+DNSEOF
+
+                else
+
+                    cat > "$BASE/dns.json" <<DNSEOF
+{
+  "dns": {
+    "servers": [
+      {
+        "tag": "dns-1",
+        "address": "$DNS1"
+      }
+    ],
+    "final": "dns-1"
+  }
+}
+DNSEOF
+
+                fi
+
+                rebuild && service_restart
+
+                echo "DNS 已更新：$DNS_INPUT"
+            fi
             pause
             ;;
 
@@ -3398,6 +3476,7 @@ main() {
         install_link_generator
         install_lsb
         printf '%s\n' "$SCRIPT_VERSION" > "$BASE/script-version"
+        rm -f "$BASE/update-hint" "$BASE/.last-update-check"
         echo "组件已更新。"
         exit 0
     fi
