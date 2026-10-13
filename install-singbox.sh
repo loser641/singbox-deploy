@@ -513,7 +513,7 @@ configure_dns() {
     [ -n "$DNS_INPUT" ] || DNS_INPUT="1.1.1.1"
 
     DNS1="$(printf '%s' "$DNS_INPUT" | cut -d',' -f1)"
-    DNS2="$(printf '%s' "$DNS_INPUT" | cut -d',' -f2)"
+    DNS2="$(printf '%s' "$DNS_INPUT" | awk -F',' 'NF > 1 { print $2 }')"
 
     if [ -n "$DNS2" ]; then
 
@@ -3035,7 +3035,7 @@ while :; do
             if [ -n "$DNS_INPUT" ]; then
 
                 DNS1="$(printf '%s' "$DNS_INPUT" | cut -d',' -f1)"
-                DNS2="$(printf '%s' "$DNS_INPUT" | cut -d',' -f2)"
+                DNS2="$(printf '%s' "$DNS_INPUT" | awk -F',' 'NF > 1 { print $2 }')"
 
                 if [ -n "$DNS2" ]; then
 
