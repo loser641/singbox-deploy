@@ -104,11 +104,14 @@ work_dir() {
 }
 
 rate_opt() {
-    # 内存不足 256MB 时限速，压住解压写入的脏页尖峰，避免 OOM
+    # 按可用内存分档限速：解压写入速率约是下载速率的 3 倍，
+    # 速率过高时脏页会顶破小内存机器的上限触发 OOM
     AVAIL_KB="$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
 
-    if [ "${AVAIL_KB:-0}" -lt 262144 ] 2>/dev/null; then
-        echo "--limit-rate=1m"
+    if [ "${AVAIL_KB:-0}" -lt 131072 ] 2>/dev/null; then
+        echo "--limit-rate=2m"
+    elif [ "${AVAIL_KB:-0}" -lt 262144 ] 2>/dev/null; then
+        echo "--limit-rate=4m"
     fi
 }
 
@@ -2344,11 +2347,14 @@ work_dir() {
 }
 
 rate_opt() {
-    # 内存不足 256MB 时限速，压住解压写入的脏页尖峰，避免 OOM
+    # 按可用内存分档限速：解压写入速率约是下载速率的 3 倍，
+    # 速率过高时脏页会顶破小内存机器的上限触发 OOM
     AVAIL_KB="$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
 
-    if [ "${AVAIL_KB:-0}" -lt 262144 ] 2>/dev/null; then
-        echo "--limit-rate=1m"
+    if [ "${AVAIL_KB:-0}" -lt 131072 ] 2>/dev/null; then
+        echo "--limit-rate=2m"
+    elif [ "${AVAIL_KB:-0}" -lt 262144 ] 2>/dev/null; then
+        echo "--limit-rate=4m"
     fi
 }
 
