@@ -2379,6 +2379,41 @@ rate_opt() {
     fi
 }
 
+enable_bbr() {
+
+    if [ ! -f /proc/sys/net/ipv4/tcp_congestion_control ]; then
+        echo "当前系统无法检测 BBR。"
+        return
+    fi
+
+    AVAILABLE="$(cat /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null)"
+    CURRENT="$(cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null)"
+
+    echo "当前：$CURRENT"
+    echo "可用：$AVAILABLE"
+
+    case " $AVAILABLE " in
+        *" bbr "*)
+            echo "[+] 检测到 BBR，启用。"
+
+            mkdir -p /etc/sysctl.d
+
+            cat > /etc/sysctl.d/99-sing-box-bbr.conf <<BBREOF
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+BBREOF
+
+            sysctl --system >/dev/null 2>&1 || true
+            sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || true
+
+            echo "[+] BBR 已启用（立即生效 + 开机持久化）。"
+            ;;
+        *)
+            echo "当前内核不支持 BBR，不修改。"
+            ;;
+    esac
+}
+
 list_configs() {
 
     echo
@@ -3093,6 +3128,14 @@ DNSEOF
             echo
             echo "Available:"
             cat /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null
+            echo
+
+            if ask_yes_no "启用 BBR"; then
+                enable_bbr
+            else
+                echo "未修改。"
+            fi
+
             pause
             ;;
 
