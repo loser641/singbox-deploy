@@ -63,7 +63,12 @@ random_port() {
 }
 
 random_password() {
-    "$BIN" generate rand --base64 24 | tr -d '\n'
+    # 用内核随机源，避免拉起 sing-box 进程（小内存机器上会被 OOM 杀掉导致空值）
+    if [ -r /dev/urandom ]; then
+        tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32
+    else
+        "$BIN" generate rand --base64 24 2>/dev/null | tr -d '\n'
+    fi
 }
 
 pause() {
@@ -576,12 +581,25 @@ EOF
 # ==========================================================
 
 generate_uuid() {
-    "$BIN" generate uuid
+    # 用内核随机源，避免拉起 sing-box 进程（小内存机器上会被 OOM 杀掉导致空值）
+    if [ -r /proc/sys/kernel/random/uuid ]; then
+        cat /proc/sys/kernel/random/uuid
+    else
+        "$BIN" generate uuid 2>/dev/null
+    fi
 }
 
 generate_reality() {
 
-    REALITY="$("$BIN" generate reality-keypair)"
+    # sing-box 进程在小内存机器上可能被 OOM 杀掉导致空输出，重试兜底
+    REALITY=""
+    TRY=0
+
+    while [ -z "$REALITY" ] && [ "$TRY" -lt 3 ]; do
+        TRY=$((TRY+1))
+        REALITY="$("$BIN" generate reality-keypair 2>/dev/null)"
+        [ -n "$REALITY" ] || sleep 1
+    done
 
     PRIVATE_KEY="$(
         printf '%s\n' "$REALITY" |
@@ -593,7 +611,16 @@ generate_reality() {
         sed -n 's/^PublicKey: //p'
     )"
 
-    SHORT_ID="$("$BIN" generate rand 8 --hex)"
+    if [ -r /dev/urandom ]; then
+        SHORT_ID="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+    else
+        SHORT_ID="$("$BIN" generate rand 8 --hex 2>/dev/null)"
+    fi
+
+    [ -n "$PRIVATE_KEY" ] && [ -n "$PUBLIC_KEY" ] || {
+        echo "Reality 密钥生成失败。"
+        return 1
+    }
 }
 
 # ==========================================================
@@ -627,8 +654,8 @@ add_vless_reality() {
         return
     fi
 
-    UUID="$(generate_uuid)"
-    generate_reality
+    UUID="$(generate_uuid)"; [ -n "$UUID" ] || { echo "UUID 生成失败。"; return 1; }
+    generate_reality || return 1
 
     SNI="itunes.apple.com"
     PORT=40443
@@ -702,8 +729,8 @@ add_vless_reality_free() {
         return
     fi
 
-    UUID="$(generate_uuid)"
-    generate_reality
+    UUID="$(generate_uuid)"; [ -n "$UUID" ] || { echo "UUID 生成失败。"; return 1; }
+    generate_reality || return 1
 
     SNI="dx-baiducdnct.inter.iqiyi.com"
     PORT=50443
@@ -774,8 +801,8 @@ add_tuic() {
 
     ensure_certificate || return 1
 
-    UUID="$(generate_uuid)"
-    PASSWORD="$(random_password)"
+    UUID="$(generate_uuid)"; [ -n "$UUID" ] || { echo "UUID 生成失败。"; return 1; }
+    PASSWORD="$(random_password)"; [ -n "$PASSWORD" ] || { echo "密码生成失败。"; return 1; }
     PORT="$(random_port)"
 
     echo
@@ -835,7 +862,7 @@ add_anytls() {
 
     ensure_certificate || return 1
 
-    PASSWORD="$(random_password)"
+    PASSWORD="$(random_password)"; [ -n "$PASSWORD" ] || { echo "密码生成失败。"; return 1; }
     PORT="$(random_port)"
 
     echo
@@ -956,7 +983,7 @@ add_hysteria2() {
 
     ensure_certificate || return 1
 
-    PASSWORD="$(random_password)"
+    PASSWORD="$(random_password)"; [ -n "$PASSWORD" ] || { echo "密码生成失败。"; return 1; }
     PORT="$(random_port)"
 
     echo
@@ -1147,8 +1174,8 @@ add_anyreality() {
         return
     fi
 
-    UUID="$(generate_uuid)"
-    generate_reality
+    UUID="$(generate_uuid)"; [ -n "$UUID" ] || { echo "UUID 生成失败。"; return 1; }
+    generate_reality || return 1
 
     PORT=30443
     PASSWORD="$UUID"
@@ -1322,11 +1349,15 @@ rebuild_config() {
         return 1
     fi
 
+    if ! "$BIN" check -c "$TMP"; then
+        rm -f "$TMP"
+        echo "配置校验失败，已保留原配置。"
+        return 1
+    fi
+
     mv "$TMP" "$CONFIG"
 
     chmod 600 "$CONFIG"
-
-    "$BIN" check -c "$CONFIG"
 }
 
 # ==========================================================
@@ -1540,8 +1571,11 @@ add_config_menu() {
 
     run_selection "$N"
 
-    rebuild_config
-    start_service
+    if rebuild_config; then
+        start_service
+    else
+        echo "配置未生效，服务保持原状。"
+    fi
 }
 
 # ==========================================================
