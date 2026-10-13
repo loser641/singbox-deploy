@@ -522,12 +522,14 @@ configure_dns() {
   "dns": {
     "servers": [
       {
+        "type": "udp",
         "tag": "dns-1",
-        "address": "$DNS1"
+        "server": "$DNS1"
       },
       {
+        "type": "udp",
         "tag": "dns-2",
-        "address": "$DNS2"
+        "server": "$DNS2"
       }
     ],
     "final": "dns-1"
@@ -542,8 +544,9 @@ EOF
   "dns": {
     "servers": [
       {
+        "type": "udp",
         "tag": "dns-1",
-        "address": "$DNS1"
+        "server": "$DNS1"
       }
     ],
     "final": "dns-1"
@@ -2579,7 +2582,7 @@ rebuild() {
                         tag: "direct"
                     }
                 ]
-            }' > "$BASE/config.json"
+            }' > "$BASE/config.tmp.json"
 
     else
 
@@ -2598,12 +2601,18 @@ rebuild() {
                         tag: "direct"
                     }
                 ]
-            }' > "$BASE/config.json"
+            }' > "$BASE/config.tmp.json"
     fi
 
     rm -f "$INLIST"
 
-    "$BIN" check -c "$BASE/config.json"
+    if ! "$BIN" check -c "$BASE/config.tmp.json"; then
+        rm -f "$BASE/config.tmp.json"
+        echo "配置校验失败，已保留原配置。"
+        return 1
+    fi
+
+    mv "$BASE/config.tmp.json" "$BASE/config.json"
 }
 
 view_config() {
@@ -3035,12 +3044,14 @@ while :; do
   "dns": {
     "servers": [
       {
+        "type": "udp",
         "tag": "dns-1",
-        "address": "$DNS1"
+        "server": "$DNS1"
       },
       {
+        "type": "udp",
         "tag": "dns-2",
-        "address": "$DNS2"
+        "server": "$DNS2"
       }
     ],
     "final": "dns-1"
@@ -3055,8 +3066,9 @@ DNSEOF
   "dns": {
     "servers": [
       {
+        "type": "udp",
         "tag": "dns-1",
-        "address": "$DNS1"
+        "server": "$DNS1"
       }
     ],
     "final": "dns-1"
@@ -3066,9 +3078,11 @@ DNSEOF
 
                 fi
 
-                rebuild && service_restart
-
-                echo "DNS 已更新：$DNS_INPUT"
+                if rebuild && service_restart; then
+                    echo "DNS 已更新：$DNS_INPUT"
+                else
+                    echo "DNS 更新失败：配置校验未通过，已保留原配置。"
+                fi
             fi
             pause
             ;;
