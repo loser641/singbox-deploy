@@ -789,6 +789,9 @@ add_tuic() {
   "tls": {
     "enabled": true,
     "server_name": "www.bing.com",
+    "alpn": [
+      "h3"
+    ],
     "min_version": "1.2",
     "certificate_path": "$CERT_DIR/www.bing.com.crt",
     "key_path": "$CERT_DIR/www.bing.com.key"
@@ -979,6 +982,9 @@ add_hysteria2() {
   "tls": {
     "enabled": true,
     "server_name": "www.bing.com",
+    "alpn": [
+      "h3"
+    ],
     "min_version": "1.2",
     "certificate_path": "$CERT_DIR/www.bing.com.crt",
     "key_path": "$CERT_DIR/www.bing.com.key"
