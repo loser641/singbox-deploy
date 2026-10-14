@@ -1368,15 +1368,15 @@ install_service() {
         rm -f /etc/init.d/sing-box
 
         CRON_LINE="@reboot GOMEMLIMIT=24MiB $BIN run -c $CONFIG > /dev/null 2>&1 &"
-        WATCHDOG="* * * * * pgrep -x sing-box >/dev/null 2>&1 || { GOMEMLIMIT=24MiB $BIN run -c $CONFIG > /dev/null 2>&1 & sleep 2; echo 800 > /proc/\$(pgrep -x sing-box | head -1)/oom_score_adj 2>/dev/null; }"
+        WATCHDOG="* * * * * pgrep -f sing-box.run >/dev/null 2>&1 || { GOMEMLIMIT=24MiB $BIN run -c $CONFIG > /dev/null 2>&1 & sleep 2; echo 800 > /proc/\$(pgrep -f sing-box.run | head -1)/oom_score_adj 2>/dev/null; }"
 
         (
-            crontab -l 2>/dev/null | grep -v '@reboot.*sing-box run' | grep -v 'pgrep -x sing-box' || true
+            crontab -l 2>/dev/null | grep -v '@reboot.*sing-box run' | grep -v 'pgrep -f sing-box.run' || true
             printf '%s\n%s\n' "$CRON_LINE" "$WATCHDOG"
         ) | crontab -
 
         # Alpine 容器常无 crond 服务且未运行——不拉起的话 crontab 全部失效
-        if command_exists crond && ! pgrep -x crond >/dev/null 2>&1; then
+        if command_exists crond && ! pgrep -f crond >/dev/null 2>&1; then
             crond 2>/dev/null || true
         fi
 
@@ -1385,12 +1385,12 @@ install_service() {
 
         cat > /etc/local.d/sing-box.start <<SDEOF
 #!/bin/sh
-if command -v crond >/dev/null 2>&1 && ! pgrep -x crond >/dev/null 2>&1; then
+if command -v crond >/dev/null 2>&1 && ! pgrep -f crond >/dev/null 2>&1; then
     crond 2>/dev/null
 fi
 GOMEMLIMIT=24MiB $BIN run -c $CONFIG > /dev/null 2>&1 &
 sleep 2
-echo 800 > /proc/\$(pgrep -x sing-box | head -1)/oom_score_adj 2>/dev/null
+echo 800 > /proc/\$(pgrep -f sing-box.run | head -1)/oom_score_adj 2>/dev/null
 SDEOF
 
         chmod +x /etc/local.d/sing-box.start
@@ -1427,7 +1427,7 @@ EOF
 start_service() {
 
     if [ "$OS_ID" = "alpine" ]; then
-        pkill -x sing-box 2>/dev/null || true
+        kill $(pgrep -f sing-box.run) 2>/dev/null 2>/dev/null || true
         sleep 1
         GOMEMLIMIT=24MiB nohup "$BIN" run -c "$CONFIG" > /dev/null 2>&1 &
         sleep 1
@@ -1439,7 +1439,7 @@ start_service() {
 stop_service() {
 
     if [ "$OS_ID" = "alpine" ]; then
-        pkill -x sing-box 2>/dev/null || true
+        kill $(pgrep -f sing-box.run) 2>/dev/null 2>/dev/null || true
     else
         systemctl stop sing-box
     fi
@@ -1448,7 +1448,7 @@ stop_service() {
 service_status() {
 
     if [ "$OS_ID" = "alpine" ]; then
-        if pgrep -x sing-box >/dev/null 2>&1; then
+        if pgrep -f sing-box.run >/dev/null 2>&1; then
             echo "sing-box 运行中："
             pgrep -a sing-box
         else
@@ -2594,7 +2594,7 @@ service_stop() {
     if command -v systemctl >/dev/null 2>&1; then
         systemctl stop sing-box
     else
-        pkill -x sing-box 2>/dev/null || true
+        kill $(pgrep -f sing-box.run) 2>/dev/null 2>/dev/null || true
     fi
 }
 
@@ -2603,7 +2603,7 @@ service_restart() {
     if command -v systemctl >/dev/null 2>&1; then
         systemctl restart sing-box
     else
-        pkill -x sing-box 2>/dev/null || true
+        kill $(pgrep -f sing-box.run) 2>/dev/null 2>/dev/null || true
         sleep 1
         GOMEMLIMIT=24MiB nohup /usr/local/bin/sing-box run -c /etc/sing-box/config.json > /dev/null 2>&1 &
     fi
@@ -2614,7 +2614,7 @@ service_status() {
     if command -v systemctl >/dev/null 2>&1; then
         systemctl status sing-box --no-pager
     else
-        if pgrep -x sing-box >/dev/null 2>&1; then
+        if pgrep -f sing-box.run >/dev/null 2>&1; then
             echo "sing-box 运行中："
             pgrep -a sing-box
         else
