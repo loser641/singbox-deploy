@@ -52,7 +52,7 @@ if [ "$(id -u)" != "0" ]; then
 fi
 
 # 限制 Go 堆内存，避免小内存机器上 sing-box 启动/运行时触发 OOM
-export GOMEMLIMIT=48MiB
+export GOMEMLIMIT=24MiB
 
 # ==========================================================
 # Common
@@ -1367,8 +1367,8 @@ install_service() {
         # Alpine 64MB 内存下 OpenRC 容易出问题，改用 crontab 开机自启（参考部署指南 2.5）
         rm -f /etc/init.d/sing-box
 
-        CRON_LINE="@reboot GOMEMLIMIT=48MiB $BIN run -c $CONFIG > /dev/null 2>&1 &"
-        WATCHDOG="* * * * * pgrep -x sing-box >/dev/null 2>&1 || GOMEMLIMIT=48MiB $BIN run -c $CONFIG > /dev/null 2>&1 &"
+        CRON_LINE="@reboot GOMEMLIMIT=24MiB $BIN run -c $CONFIG > /dev/null 2>&1 &"
+        WATCHDOG="* * * * * pgrep -x sing-box >/dev/null 2>&1 || { GOMEMLIMIT=24MiB $BIN run -c $CONFIG > /dev/null 2>&1 & sleep 2; echo 800 > /proc/\$(pgrep -x sing-box | head -1)/oom_score_adj 2>/dev/null; }"
 
         (
             crontab -l 2>/dev/null | grep -v '@reboot.*sing-box run' | grep -v 'pgrep -x sing-box' || true
@@ -1388,7 +1388,9 @@ install_service() {
 if command -v crond >/dev/null 2>&1 && ! pgrep -x crond >/dev/null 2>&1; then
     crond 2>/dev/null
 fi
-GOMEMLIMIT=48MiB $BIN run -c $CONFIG > /dev/null 2>&1 &
+GOMEMLIMIT=24MiB $BIN run -c $CONFIG > /dev/null 2>&1 &
+sleep 2
+echo 800 > /proc/\$(pgrep -x sing-box | head -1)/oom_score_adj 2>/dev/null
 SDEOF
 
         chmod +x /etc/local.d/sing-box.start
@@ -1427,7 +1429,7 @@ start_service() {
     if [ "$OS_ID" = "alpine" ]; then
         pkill -x sing-box 2>/dev/null || true
         sleep 1
-        GOMEMLIMIT=48MiB nohup "$BIN" run -c "$CONFIG" > /dev/null 2>&1 &
+        GOMEMLIMIT=24MiB nohup "$BIN" run -c "$CONFIG" > /dev/null 2>&1 &
         sleep 1
     else
         systemctl restart sing-box
@@ -2408,7 +2410,7 @@ BASE="/etc/sing-box"
 BIN="/usr/local/bin/sing-box"
 
 # 限制 Go 堆内存，避免小内存机器上 sing-box 启动/运行时触发 OOM
-export GOMEMLIMIT=48MiB
+export GOMEMLIMIT=24MiB
 
 random_port() {
     awk 'BEGIN{srand(); print int(20000+rand()*40000)}'
@@ -2583,7 +2585,7 @@ service_start() {
     if command -v systemctl >/dev/null 2>&1; then
         systemctl start sing-box
     else
-        GOMEMLIMIT=48MiB nohup /usr/local/bin/sing-box run -c /etc/sing-box/config.json > /dev/null 2>&1 &
+        GOMEMLIMIT=24MiB nohup /usr/local/bin/sing-box run -c /etc/sing-box/config.json > /dev/null 2>&1 &
     fi
 }
 
@@ -2603,7 +2605,7 @@ service_restart() {
     else
         pkill -x sing-box 2>/dev/null || true
         sleep 1
-        GOMEMLIMIT=48MiB nohup /usr/local/bin/sing-box run -c /etc/sing-box/config.json > /dev/null 2>&1 &
+        GOMEMLIMIT=24MiB nohup /usr/local/bin/sing-box run -c /etc/sing-box/config.json > /dev/null 2>&1 &
     fi
 }
 
