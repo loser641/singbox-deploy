@@ -29,19 +29,24 @@ sing-box 多协议一键部署脚本，**专为低配 Alpine NAT 小鸡设计**�
 
 ## 快速开始
 
-在 VPS 上运行：
+在 VPS 上运行（Alpine/Debian 自带 wget，**无需预装任何下载工具**）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/loser641/singbox-deploy/main/install-singbox.sh -o install-singbox.sh && sh install-singbox.sh
+sh -c "$(wget -qO- https://github.com/loser641/singbox-deploy/raw/main/sb.sh)"
 ```
 
-或：
+或用 curl：
 
 ```bash
-wget -O install-singbox.sh https://raw.githubusercontent.com/loser641/singbox-deploy/main/install-singbox.sh
-chmod +x install-singbox.sh
-./install-singbox.sh
+sh -c "$(curl -fsSL https://github.com/loser641/singbox-deploy/raw/main/sb.sh)"
 ```
+
+> **为什么是 `sh -c "$(...)"`，而不是别人家的 `bash <(curl ...)` 或 `curl ... | sh`？**
+> - 项目目标机是 Alpine NAT 小鸡，默认只有 busybox ash——**没有 bash**，`<(....)` 进程替换直接报语法错误；
+> - `curl ... | sh` 会把脚本内容当标准输入，安装过程中的交互提问会把脚本"吃掉"；
+> - `sh -c "$(...)"` 把脚本作为参数执行，stdin 保持终端，ash/bash 通用，下载工具 wget / curl 任一即可。
+>
+> 旧命令（下载 `install-singbox.sh`）仍然可用，会自动转发到 `sb.sh`。
 
 ## 管理面板
 
