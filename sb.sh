@@ -33,7 +33,7 @@
 
 set -u
 
-SCRIPT_VERSION="2026.10.15.1"
+SCRIPT_VERSION="2026.10.15.2"
 
 BIN="/usr/local/bin/sing-box"
 BASE="/etc/sing-box"
