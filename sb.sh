@@ -3116,7 +3116,9 @@ update_menu() {
             }
             chmod +x /usr/local/bin/install-singbox.sh
             sh /usr/local/bin/install-singbox.sh --update-components
-            echo "脚本已更新。"
+            echo "脚本已更新，面板即将自动重启..."
+            sleep 1
+            exec /usr/local/bin/sing-box-manager
             ;;
         2)
             update_kernel
@@ -3135,10 +3137,15 @@ while :; do
     echo
 
     VER="$(cat "$BASE/sing-box-version" 2>/dev/null)"
+    if [ -z "$VER" ]; then
+        VER="$( ( "$BIN" version 2>/dev/null | head -n 1 | awk '{print $3}' ) 2>/dev/null )"
+        if [ -n "$VER" ]; then
+            printf '%s
+' "$VER" > "$BASE/sing-box-version"
+        fi
+    fi
     if [ -n "$VER" ]; then
         echo "sing-box version $VER"
-    else
-        "$BIN" version 2>/dev/null | head -n 1
     fi
 
     echo
