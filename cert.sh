@@ -92,7 +92,7 @@ if [ -z "$DOMAIN" ]; then
 fi
 [ -n "$DOMAIN" ] || { echo "域名不能为空。"; exit 1; }
 
-if [ -z "$EMAIL" ]; then
+if [ -z "$EMAIL" ] && [ -z "$YES" ]; then
     printf "请输入邮箱（到期提醒，留空默认 admin@%s）：" "$DOMAIN"
     read EMAIL
 fi
