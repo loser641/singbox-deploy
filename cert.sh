@@ -200,25 +200,45 @@ case "$METHOD" in
         ;;
 esac
 
+ISSUE_OK=""
+for d in "$HOME/.acme.sh/${DOMAIN}_ecc" "$HOME/.acme.sh/$DOMAIN"; do
+    if [ -s "$d/fullchain.cer" ]; then
+        ISSUE_OK=1
+    fi
+done
+
+if [ -z "$ISSUE_OK" ]; then
+    echo "签发失败（详见上方 acme 输出），原有证书未改动。"
+    exit 1
+fi
+
 # ---------- 4. 安装到 /etc/sing-box/cert ----------
 
 echo "[4/4] 安装证书到 $CERT_DIR ..."
 
 mkdir -p "$CERT_DIR"
 
+TMP_CRT="/tmp/.sb-cert-new.crt"
+TMP_KEY="/tmp/.sb-cert-new.key"
+rm -f "$TMP_CRT" "$TMP_KEY"
+
 if command_exists systemctl; then
-    RELOAD="systemctl restart sing-box"
+    RELOAD="if [ -s $TMP_CRT ] && [ -s $TMP_KEY ]; then mv $TMP_CRT $CRT; mv $TMP_KEY $KEY; chmod 600 $KEY; chmod 644 $CRT; fi; systemctl restart sing-box"
 else
-    RELOAD="pkill -f sing-box.run 2>/dev/null; sleep 1; GOMEMLIMIT=24MiB /usr/local/bin/sing-box run -c $BASE/config.json >/dev/null 2>&1 & sleep 2; echo 800 > /proc/\$(pgrep -f sing-box.run | head -1)/oom_score_adj 2>/dev/null; true"
+    RELOAD="if [ -s $TMP_CRT ] && [ -s $TMP_KEY ]; then mv $TMP_CRT $CRT; mv $TMP_KEY $KEY; chmod 600 $KEY; chmod 644 $CRT; fi; pkill -f sing-box.run 2>/dev/null; sleep 1; GOMEMLIMIT=24MiB /usr/local/bin/sing-box run -c $BASE/config.json >/dev/null 2>&1 & sleep 2; echo 800 > /proc/\$(pgrep -f sing-box.run | head -1)/oom_score_adj 2>/dev/null; true"
 fi
 
-"$ACME" --install-cert -d "$DOMAIN" --fullchain-file "$CRT" --key-file "$KEY" --reloadcmd "$RELOAD" || {
-    echo "证书安装失败。"
+"$ACME" --install-cert -d "$DOMAIN" --fullchain-file "$TMP_CRT" --key-file "$TMP_KEY" --reloadcmd "$RELOAD" || {
+    echo "证书安装失败，原有证书未改动。"
+    rm -f "$TMP_CRT" "$TMP_KEY"
     exit 1
 }
 
-chmod 600 "$KEY" 2>/dev/null
-chmod 644 "$CRT" 2>/dev/null
+if [ ! -s "$CRT" ] || [ ! -s "$KEY" ]; then
+    echo "证书落盘校验失败，原有证书未改动。"
+    rm -f "$TMP_CRT" "$TMP_KEY"
+    exit 1
+fi
 
 echo
 echo "=========================================="
