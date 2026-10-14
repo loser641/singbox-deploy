@@ -223,7 +223,7 @@ TMP_KEY="/tmp/.sb-cert-new.key"
 rm -f "$TMP_CRT" "$TMP_KEY"
 
 if command_exists systemctl; then
-    RELOAD="if [ -s $TMP_CRT ] && [ -s $TMP_KEY ]; then mv $TMP_CRT $CRT; mv $TMP_KEY $KEY; chmod 600 $KEY; chmod 644 $CRT; fi; systemctl restart sing-box"
+    RELOAD="if [ -s $TMP_CRT ] && [ -s $TMP_KEY ]; then mv $TMP_CRT $CRT; mv $TMP_KEY $KEY; chmod 600 $KEY; chmod 644 $CRT; fi; systemctl restart sing-box >/dev/null 2>&1 || true"
 else
     RELOAD="if [ -s $TMP_CRT ] && [ -s $TMP_KEY ]; then mv $TMP_CRT $CRT; mv $TMP_KEY $KEY; chmod 600 $KEY; chmod 644 $CRT; fi; pkill -f sing-box.run 2>/dev/null; sleep 1; GOMEMLIMIT=24MiB /usr/local/bin/sing-box run -c $BASE/config.json >/dev/null 2>&1 & sleep 2; echo 800 > /proc/\$(pgrep -f sing-box.run | head -1)/oom_score_adj 2>/dev/null; true"
 fi
