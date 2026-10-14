@@ -93,6 +93,9 @@ sh -c "$(wget -qO- https://github.com/loser641/singbox-deploy/raw/main/cert.sh)"
 - 支持 `--staging`：先用 Let's Encrypt 测试证书跑通流程，再申请正式证书
 - 证书装入 `/etc/sing-box/cert/`（主脚本自动复用，不会被自签名覆盖）；acme.sh 定时自动续期，续期后自动重启 sing-box
 - 客户端：SNI / 服务器名填申请的域名，按系统根证书校验（关闭 allow_insecure），**无需固定证书**；REALITY 类节点不使用此证书
+- **自动备份**：覆盖安装前把现有证书备份到 `/root/sb-cert-backup`（只备一次，保住最初的证书）
+- **恢复自签名**（工具内选项 2 / `--restore`）：还原备份证书（固定证书 PEM 继续有效）并清除 acme 申请记录——**防止自动续期日后把真证书换回来**；没有备份时生成新自签证书
+- **卸载 acme.sh**（工具内选项 3 / `--uninstall-acme`）：清除申请记录和自动续期 cron；若当前是真证书会先警告（到期后无人续期）
 
 ## 配置目录
 

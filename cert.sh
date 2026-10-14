@@ -1,23 +1,28 @@
 #!/bin/sh
 # ==========================================================
-# sing-box 真实证书申请工具（acme.sh）
+# sing-box 证书工具（acme.sh）—— 申请 / 恢复自签 / 卸载
 #
 # 独立于主脚本：只在运行时下载 acme.sh，不预装。
 # 申请到的真实证书装入 /etc/sing-box/cert/www.bing.com.crt/.key
 # （文件名固定）：主脚本部署协议时看到已有证书会直接复用，
 # 不会用自签名覆盖。
-# acme.sh 安装后自带定时续期，续期后自动重启 sing-box。
+# 覆盖安装前自动把现有证书备份到 /root/sb-cert-backup，
+# 选"恢复自签名"时原样还原（固定证书 PEM 继续有效），
+# 并清除 acme 申请记录，防止自动续期把真证书换回来。
 #
 # 用法：
 #   交互：sh cert.sh
-#   参数：sh cert.sh -d 域名 -m dns_cf|standalone|webroot
-#              [-w 网站目录] [-e 邮箱] [--staging] [-y]
+#   申请：sh cert.sh -d 域名 -m dns_cf|standalone|webroot
+#            [-w 网站目录] [-e 邮箱] [--staging] [-y]
+#   还原：sh cert.sh --restore [-y]
+#   卸载：sh cert.sh --uninstall-acme [-y]
 # ==========================================================
 
 BASE="/etc/sing-box"
 CERT_DIR="$BASE/cert"
 CRT="$CERT_DIR/www.bing.com.crt"
 KEY="$CERT_DIR/www.bing.com.key"
+BACKUP_DIR="/root/sb-cert-backup"
 ACME="$HOME/.acme.sh/acme.sh"
 
 DOMAIN=""
@@ -26,6 +31,7 @@ WEBROOT=""
 EMAIL=""
 STAGING=""
 YES=""
+ACTION="issue"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -35,8 +41,12 @@ while [ $# -gt 0 ]; do
         -e|--email)   EMAIL="$2"; shift 2 ;;
         --staging)    STAGING=1; shift ;;
         -y|--yes)     YES=1; shift ;;
+        --restore)        ACTION="restore"; shift ;;
+        --uninstall-acme) ACTION="uninstall"; shift ;;
         -h|--help)
             echo "用法：sh cert.sh -d 域名 -m dns_cf|standalone|webroot [-w 网站目录] [-e 邮箱] [--staging] [-y]"
+            echo "     sh cert.sh --restore [-y]         恢复自签名证书（还原备份、防续期换回）"
+            echo "     sh cert.sh --uninstall-acme [-y]  卸载 acme.sh"
             exit 0 ;;
         *)
             echo "未知参数：$1（--help 看用法）"
@@ -45,6 +55,177 @@ while [ $# -gt 0 ]; do
 done
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+restart_singbox() {
+    if command_exists systemctl; then
+        systemctl restart sing-box >/dev/null 2>&1 || true
+    else
+        pkill -f ^/usr/local/bin/sing-box 2>/dev/null
+        sleep 1
+        GOMEMLIMIT=24MiB /usr/local/bin/sing-box run -c "$BASE/config.json" >/dev/null 2>&1 &
+        sleep 2
+        PID="$(pgrep -f '^/usr/local/bin/sing-box' | head -1)"
+        if [ -n "$PID" ]; then
+            echo 800 > /proc/$PID/oom_score_adj 2>/dev/null
+        fi
+    fi
+}
+
+install_pkgs() {
+    MISSING=""
+    for p in "$@"; do
+        command_exists "$p" || MISSING="$MISSING $p"
+    done
+    [ -n "$MISSING" ] || return 0
+    echo "安装依赖：$MISSING"
+    if [ -f /etc/alpine-release ]; then
+        # 64MB 小内存：先停 sing-box 腾出内存，避免 apk 被 OOM 杀掉（装完立即拉起）
+        WAS_RUNNING=""
+        if pgrep -f '^/usr/local/bin/sing-box' >/dev/null 2>&1; then
+            WAS_RUNNING=1
+            pkill -f '^/usr/local/bin/sing-box' 2>/dev/null
+            sleep 1
+        fi
+        APK_OK=""
+        for i in 1 2 3; do
+            if apk add --no-cache $MISSING >/dev/null 2>&1; then
+                APK_OK=1
+                break
+            fi
+            sleep 2
+        done
+        if [ -n "$WAS_RUNNING" ]; then
+            GOMEMLIMIT=24MiB /usr/local/bin/sing-box run -c "$BASE/config.json" >/dev/null 2>&1 &
+            sleep 2
+            PID="$(pgrep -f '^/usr/local/bin/sing-box' | head -1)"
+            if [ -n "$PID" ]; then
+                echo 800 > /proc/$PID/oom_score_adj 2>/dev/null
+            fi
+        fi
+        [ -n "$APK_OK" ] || { echo "依赖安装失败：$MISSING"; return 1; }
+    elif command_exists apt-get; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y $MISSING >/dev/null 2>&1 || { echo "依赖安装失败：$MISSING"; return 1; }
+    else
+        echo "不支持的系统，请手动安装：$MISSING"
+        return 1
+    fi
+}
+
+gen_selfsigned() {
+    install_pkgs openssl || return 1
+    mkdir -p "$CERT_DIR"
+    cat > "$CERT_DIR/openssl.cnf" <<CNFEOF
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+C = US
+ST = Washington
+L = Redmond
+O = Microsoft
+OU = Web
+CN = www.bing.com
+
+[v3_req]
+subjectAltName = @alt_names
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth
+
+[alt_names]
+DNS.1 = www.bing.com
+CNFEOF
+    openssl req \
+        -x509 \
+        -nodes \
+        -newkey rsa:2048 \
+        -sha256 \
+        -days 36500 \
+        -keyout "$KEY" \
+        -out "$CRT" \
+        -config "$CERT_DIR/openssl.cnf" \
+        >/dev/null 2>&1
+    if [ ! -s "$KEY" ] || [ ! -s "$CRT" ]; then
+        echo "自签名证书生成失败。"
+        return 1
+    fi
+    chmod 600 "$KEY"
+    chmod 644 "$CRT"
+}
+
+backup_cert() {
+    if [ ! -d "$BACKUP_DIR" ] && [ -s "$CRT" ] && [ -s "$KEY" ]; then
+        mkdir -p "$BACKUP_DIR"
+        cp -f "$CRT" "$BACKUP_DIR/www.bing.com.crt"
+        cp -f "$KEY" "$BACKUP_DIR/www.bing.com.key"
+        echo "已备份现有证书到 $BACKUP_DIR"
+    fi
+}
+
+restore_selfsigned() {
+    echo
+    echo "=========================================="
+    echo " 恢复自签名证书"
+    echo "=========================================="
+    # 清除 acme 申请记录，防止自动续期把真实证书换回来
+    if [ -x "$ACME" ]; then
+        for d in "$HOME"/.acme.sh/*; do
+            [ -d "$d" ] || continue
+            base="$(basename "$d")"
+            case "$base" in
+                *.*) "$ACME" --remove -d "${base%_ecc}" >/dev/null 2>&1 ;;
+            esac
+        done
+    fi
+    rm -f /tmp/.sb-cert-new.crt /tmp/.sb-cert-new.key
+
+    if [ -s "$BACKUP_DIR/www.bing.com.crt" ] && [ -s "$BACKUP_DIR/www.bing.com.key" ]; then
+        mkdir -p "$CERT_DIR"
+        cp -f "$BACKUP_DIR/www.bing.com.crt" "$CRT"
+        cp -f "$BACKUP_DIR/www.bing.com.key" "$KEY"
+        chmod 600 "$KEY"
+        chmod 644 "$CRT"
+        echo "已还原备份证书（原固定证书 PEM 继续有效）。"
+    else
+        echo "没有备份证书，生成新的自签名证书（客户端需重新固定 PEM）。"
+        gen_selfsigned || exit 1
+    fi
+
+    restart_singbox
+    echo "完成。REALITY 类节点不使用此证书，不受影响。"
+}
+
+uninstall_acme() {
+    echo
+    echo "=========================================="
+    echo " 卸载 acme.sh"
+    echo "=========================================="
+    if [ -s "$CRT" ] && command_exists openssl; then
+        ISSUER="$(openssl x509 -in "$CRT" -noout -issuer 2>/dev/null)"
+        case "$ISSUER" in
+            *bing*) ;;
+            *)
+                echo "[!] 当前安装的是真实证书：$ISSUER"
+                echo "    卸载后将不再自动续期，到期后客户端校验会失败。"
+                echo "    如需稳妥，先恢复自签名证书再卸载。"
+                if [ -z "$YES" ]; then
+                    printf "仍要卸载 acme.sh？[y/N]："
+                    read ANS
+                    case "$ANS" in
+                        y|Y|yes|YES) ;;
+                        *) echo "已取消。"; return 0 ;;
+                    esac
+                fi
+                ;;
+        esac
+    fi
+    crontab -l 2>/dev/null | grep -v acme | crontab - 2>/dev/null || true
+    rm -rf "$HOME/.acme.sh"
+    rm -f /tmp/.sb-cert-new.crt /tmp/.sb-cert-new.key
+    echo "acme.sh 已卸载（证书文件未改动）。"
+}
 
 show_cert_status() {
     echo "当前证书状态："
@@ -57,15 +238,44 @@ show_cert_status() {
     else
         echo "  （无）"
     fi
+    if [ -s "$BACKUP_DIR/www.bing.com.crt" ]; then
+        echo "备份证书：$BACKUP_DIR（可还原）"
+    else
+        echo "备份证书：无"
+    fi
 }
 
 echo "=========================================="
-echo " sing-box 真实证书申请（acme.sh）"
+echo " sing-box 证书工具（acme.sh）"
 echo "=========================================="
 show_cert_status
 echo
 
+if [ "$ACTION" = "restore" ]; then
+    restore_selfsigned
+    exit $?
+fi
+
+if [ "$ACTION" = "uninstall" ]; then
+    uninstall_acme
+    exit $?
+fi
+
 if [ -z "$METHOD" ]; then
+    echo "1. 申请真实证书"
+    echo "2. 恢复自签名证书（还原备份，防止自动续期换回）"
+    echo "3. 卸载 acme.sh（清除申请记录与自动续期）"
+    echo "0. 退出"
+    printf "请选择："
+    read ANS
+    case "$ANS" in
+        1) ;;
+        2) restore_selfsigned; exit $? ;;
+        3) uninstall_acme; exit $? ;;
+        *) echo "已取消。"; exit 0 ;;
+    esac
+
+    echo
     echo "验证方式："
     echo "1. DNS 验证（Cloudflare）—— NAT 小鸡 / 80 端口不通适用"
     echo "2. HTTP 验证（standalone）—— 需要 80 端口公网可达"
@@ -144,47 +354,9 @@ fi
 echo
 echo "[1/4] 检查依赖..."
 
-MISSING=""
-for p in bash openssl curl; do
-    command_exists "$p" || MISSING="$MISSING $p"
-done
+install_pkgs bash openssl curl || exit 1
 if [ "$METHOD" = "standalone" ]; then
-    command_exists socat || MISSING="$MISSING socat"
-fi
-
-if [ -n "$MISSING" ]; then
-    echo "安装依赖：$MISSING"
-    if [ -f /etc/alpine-release ]; then
-        # 64MB 小内存：先停 sing-box 腾出内存，避免 apk 被 OOM 杀掉（装完立即拉起）
-        WAS_RUNNING=""
-        if pgrep -f "^/usr/local/bin/sing-box" >/dev/null 2>&1; then
-            WAS_RUNNING=1
-            pkill -f "^/usr/local/bin/sing-box" 2>/dev/null
-            sleep 1
-        fi
-        APK_OK=""
-        for i in 1 2 3; do
-            if apk add --no-cache $MISSING >/dev/null 2>&1; then
-                APK_OK=1
-                break
-            fi
-            sleep 2
-        done
-        if [ -n "$WAS_RUNNING" ]; then
-            GOMEMLIMIT=24MiB /usr/local/bin/sing-box run -c "$BASE/config.json" >/dev/null 2>&1 &
-            sleep 2
-            PID="$(pgrep -f '^/usr/local/bin/sing-box' | head -1)"
-            if [ -n "$PID" ]; then
-                echo 800 > /proc/$PID/oom_score_adj 2>/dev/null
-            fi
-        fi
-        [ -n "$APK_OK" ] || { echo "依赖安装失败：$MISSING"; exit 1; }
-    elif command_exists apt-get; then
-        DEBIAN_FRONTEND=noninteractive apt-get install -y $MISSING >/dev/null 2>&1 || { echo "依赖安装失败：$MISSING"; exit 1; }
-    else
-        echo "不支持的系统，请手动安装：$MISSING"
-        exit 1
-    fi
+    install_pkgs socat || exit 1
 fi
 
 # ---------- 2. acme.sh（选了才下载） ----------
@@ -244,6 +416,7 @@ fi
 
 echo "[4/4] 安装证书到 $CERT_DIR ..."
 
+backup_cert
 mkdir -p "$CERT_DIR"
 
 TMP_CRT="/tmp/.sb-cert-new.crt"
@@ -276,6 +449,7 @@ command_exists openssl && openssl x509 -in "$CRT" -noout -issuer -subject -dates
 echo
 echo "证书：$CRT"
 echo "私钥：$KEY"
+echo "备份：$BACKUP_DIR（要换回自签，运行本工具选 2）"
 echo
 echo "客户端使用："
 echo "  · SNI / 服务器名填写：$DOMAIN"
