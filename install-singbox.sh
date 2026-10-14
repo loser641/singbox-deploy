@@ -1381,6 +1381,24 @@ install_service() {
             printf '%s\n%s\n' "$CRON_LINE" "$WATCHDOG"
         ) | crontab -
 
+        # Alpine 容器常无 crond 服务且未运行——不拉起的话 crontab 全部失效
+        if command_exists crond && ! pgrep -x crond >/dev/null 2>&1; then
+            crond 2>/dev/null || true
+        fi
+
+        # 开机自启不依赖 crond：local 服务开机执行（拉起 crond + sing-box）
+        mkdir -p /etc/local.d
+
+        cat > /etc/local.d/sing-box.start <<SDEOF
+#!/bin/sh
+if command -v crond >/dev/null 2>&1 && ! pgrep -x crond >/dev/null 2>&1; then
+    crond 2>/dev/null
+fi
+GOMEMLIMIT=48MiB $BIN run -c $CONFIG > /dev/null 2>&1 &
+SDEOF
+
+        chmod +x /etc/local.d/sing-box.start
+
         echo "[+] 已配置 crontab 开机自启："
         crontab -l 2>/dev/null | grep '@reboot.*sing-box run' || true
 
