@@ -175,7 +175,7 @@ restore_selfsigned() {
             [ -d "$d" ] || continue
             base="$(basename "$d")"
             case "$base" in
-                *.*) "$ACME" --remove -d "${base%_ecc}" >/dev/null 2>&1 ;;
+                *.*) "$ACME" --remove -d "${base%_ecc}" >/dev/null 2>&1; rm -rf "$d" ;;
             esac
         done
     fi
