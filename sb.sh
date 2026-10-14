@@ -33,7 +33,7 @@
 
 set -u
 
-SCRIPT_VERSION="2026.10.14.2"
+SCRIPT_VERSION="2026.10.15.1"
 
 BIN="/usr/local/bin/sing-box"
 BASE="/etc/sing-box"
@@ -226,6 +226,24 @@ install_singbox() {
     echo " 下载最新稳定版 sing-box"
     echo "=========================================="
 
+    if [ "${SB_KERNEL:-official}" = "lite" ]; then
+
+        LTAG="$(curl -fsSL --max-time 10 "https://api.github.com/repos/loser641/sing-box-lite/releases/latest" 2>/dev/null | jq -r .tag_name 2>/dev/null)"
+
+        if [ -z "$LTAG" ] || [ "$LTAG" = "null" ]; then
+            echo "无法获取低内存裁剪版最新版本。"
+            echo "请检查网络，或不设 SB_KERNEL=lite 使用官方内核。"
+            exit 1
+        fi
+
+        VERSION="${LTAG#v}"
+        FILE="sing-box-${VERSION}-linux-${SB_ARCH}.tar.gz"
+        URL="https://github.com/loser641/sing-box-lite/releases/download/${LTAG}/${FILE}"
+
+        echo "低内存裁剪版：$VERSION"
+
+    else
+
     API="https://api.github.com/repos/SagerNet/sing-box/releases"
 
     JSON="$(curl -fsSL "$API?per_page=20" 2>/dev/null || true)"
@@ -288,6 +306,8 @@ install_singbox() {
     esac
 
     URL="https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/${FILE}"
+
+    fi
 
     TMP="$(work_dir singbox-install)"
 
@@ -2910,13 +2930,20 @@ check_updates() {
 
     : > "$HINT"
 
-    LATEST_K="$(curl -fsSL --max-time 5 "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" 2>/dev/null | jq -r '[.[] | select(.prerelease == false)][0].tag_name' 2>/dev/null | tr -d 'v')"
-
     CURRENT_K="$(cat "$BASE/sing-box-version" 2>/dev/null)"
     [ -n "$CURRENT_K" ] || CURRENT_K="$("$BIN" version 2>/dev/null | head -n 1 | awk '{print $3}')"
 
+    case "$CURRENT_K" in
+        *lite*)
+            LATEST_K="$(curl -fsSL --max-time 5 "https://api.github.com/repos/loser641/sing-box-lite/releases/latest" 2>/dev/null | jq -r .tag_name 2>/dev/null | tr -d 'v')"
+            ;;
+        *)
+            LATEST_K="$(curl -fsSL --max-time 5 "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" 2>/dev/null | jq -r '[.[] | select(.prerelease == false)][0].tag_name' 2>/dev/null | tr -d 'v')"
+            ;;
+    esac
+
     if [ -n "$LATEST_K" ] && [ -n "$CURRENT_K" ] && [ "$LATEST_K" != "$CURRENT_K" ]; then
-        echo "[!] sing-box 内核有新版本：$CURRENT_K -> $LATEST_K（选 15 更新）" >> "$HINT"
+        echo "[!] sing-box 内核有新版本：$CURRENT_K -> $LATEST_K（选 16 更新）" >> "$HINT"
     fi
 
     REMOTE_SV="$(curl -fsSL --max-time 5 -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/loser641/singbox-deploy/contents/sb.sh" 2>/dev/null | sed -n 's/^SCRIPT_VERSION="\([^"]*\)".*/\1/p' | head -n 1)"
@@ -2924,7 +2951,7 @@ check_updates() {
     LOCAL_SV="$(cat "$BASE/script-version" 2>/dev/null)"
 
     if [ -n "$REMOTE_SV" ] && [ -n "$LOCAL_SV" ] && [ "$REMOTE_SV" != "$LOCAL_SV" ]; then
-        echo "[!] 脚本有新版本：$LOCAL_SV -> $REMOTE_SV（选 15 更新）" >> "$HINT"
+        echo "[!] 脚本有新版本：$LOCAL_SV -> $REMOTE_SV（选 16 更新）" >> "$HINT"
     fi
 
     printf '%s\n' "$NOW" > "$LAST"
@@ -2937,9 +2964,21 @@ update_kernel() {
     echo
     echo "检查最新稳定版 sing-box..."
 
-    JSON="$(curl -fsSL --max-time 10 "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" 2>/dev/null)"
+    FLAVOR="$1"
+    if [ -z "$FLAVOR" ]; then
+        case "$(cat "$BASE/sing-box-version" 2>/dev/null)" in
+            *lite*) FLAVOR=lite ;;
+            *) FLAVOR=official ;;
+        esac
+    fi
 
-    V="$(printf '%s' "$JSON" | jq -r '[.[] | select(.prerelease == false)][0].tag_name' 2>/dev/null | tr -d 'v')"
+    if [ "$FLAVOR" = "lite" ]; then
+        LTAG="$(curl -fsSL --max-time 10 "https://api.github.com/repos/loser641/sing-box-lite/releases/latest" 2>/dev/null | jq -r .tag_name 2>/dev/null)"
+        V="${LTAG#v}"
+    else
+        JSON="$(curl -fsSL --max-time 10 "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" 2>/dev/null)"
+        V="$(printf '%s' "$JSON" | jq -r '[.[] | select(.prerelease == false)][0].tag_name' 2>/dev/null | tr -d 'v')"
+    fi
 
     [ -n "$V" ] || {
         echo "获取最新版本失败。"
@@ -2961,13 +3000,16 @@ update_kernel() {
         LIBC="glibc"
     fi
 
-    if [ "$SB_ARCH" = "armv7" ]; then
+    if [ "$FLAVOR" = "lite" ]; then
+        FILE="sing-box-${V}-linux-${SB_ARCH}.tar.gz"
+        URL="https://github.com/loser641/sing-box-lite/releases/download/v${V}/${FILE}"
+    elif [ "$SB_ARCH" = "armv7" ]; then
         FILE="sing-box-${V}-linux-armv7.tar.gz"
+        URL="https://github.com/SagerNet/sing-box/releases/download/v${V}/${FILE}"
     else
         FILE="sing-box-${V}-linux-${SB_ARCH}-${LIBC}.tar.gz"
+        URL="https://github.com/SagerNet/sing-box/releases/download/v${V}/${FILE}"
     fi
-
-    URL="https://github.com/SagerNet/sing-box/releases/download/v${V}/${FILE}"
 
     echo "[+] $URL"
 
@@ -3022,6 +3064,30 @@ update_kernel() {
 
     echo
     echo "sing-box 已更新到 $V"
+}
+
+switch_kernel() {
+
+    CUR="官方"
+    case "$(cat "$BASE/sing-box-version" 2>/dev/null)" in
+        *lite*) CUR="低内存裁剪版" ;;
+    esac
+
+    echo
+    echo "当前内核：$CUR"
+    echo
+    echo "1. 官方稳定版"
+    echo "2. 低内存裁剪版（sing-box-lite）"
+    echo "0. 返回"
+    echo
+    printf "请选择："
+    read K
+
+    case "$K" in
+        1) update_kernel official ;;
+        2) update_kernel lite ;;
+        *) echo "未修改。" ;;
+    esac
 }
 
 update_menu() {
@@ -3092,11 +3158,12 @@ while :; do
     echo "10. DNS"
     echo "11. BBR"
     echo "12. 申请真实证书（acme.sh）"
-    echo "13. 校验配置"
-    echo "14. 查看日志"
-    echo "15. 更新"
-    echo "16. 卸载"
-    echo "17. 退出"
+    echo "13. 切换/更新内核"
+    echo "14. 校验配置"
+    echo "15. 查看日志"
+    echo "16. 更新"
+    echo "17. 卸载"
+    echo "18. 退出"
 
     echo
     printf "请选择："
@@ -3251,23 +3318,28 @@ DNSEOF
             ;;
 
         13)
-            "$BIN" check -c "$BASE/config.json"
+            switch_kernel
             pause
             ;;
 
         14)
+            "$BIN" check -c "$BASE/config.json"
+            pause
+            ;;
+
+        15)
             if command -v journalctl >/dev/null 2>&1; then
                 journalctl -u sing-box --no-pager -n 100
             fi
             pause
             ;;
 
-        15)
+        16)
             update_menu
             pause
             ;;
 
-        16)
+        17)
             echo
             if ask_yes_no "确认卸载？"; then
                 service_stop 2>/dev/null || true
@@ -3291,7 +3363,7 @@ DNSEOF
             fi
             ;;
 
-        17)
+        18)
             exit 0
             ;;
 
