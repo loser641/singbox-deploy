@@ -33,7 +33,7 @@
 
 set -u
 
-SCRIPT_VERSION="2026.10.14.1"
+SCRIPT_VERSION="2026.10.14.2"
 
 BIN="/usr/local/bin/sing-box"
 BASE="/etc/sing-box"
@@ -2916,7 +2916,7 @@ check_updates() {
     [ -n "$CURRENT_K" ] || CURRENT_K="$("$BIN" version 2>/dev/null | head -n 1 | awk '{print $3}')"
 
     if [ -n "$LATEST_K" ] && [ -n "$CURRENT_K" ] && [ "$LATEST_K" != "$CURRENT_K" ]; then
-        echo "[!] sing-box 内核有新版本：$CURRENT_K -> $LATEST_K（选 14 更新）" >> "$HINT"
+        echo "[!] sing-box 内核有新版本：$CURRENT_K -> $LATEST_K（选 15 更新）" >> "$HINT"
     fi
 
     REMOTE_SV="$(curl -fsSL --max-time 5 -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/loser641/singbox-deploy/contents/sb.sh" 2>/dev/null | sed -n 's/^SCRIPT_VERSION="\([^"]*\)".*/\1/p' | head -n 1)"
@@ -2924,7 +2924,7 @@ check_updates() {
     LOCAL_SV="$(cat "$BASE/script-version" 2>/dev/null)"
 
     if [ -n "$REMOTE_SV" ] && [ -n "$LOCAL_SV" ] && [ "$REMOTE_SV" != "$LOCAL_SV" ]; then
-        echo "[!] 脚本有新版本：$LOCAL_SV -> $REMOTE_SV（选 14 更新）" >> "$HINT"
+        echo "[!] 脚本有新版本：$LOCAL_SV -> $REMOTE_SV（选 15 更新）" >> "$HINT"
     fi
 
     printf '%s\n' "$NOW" > "$LAST"
@@ -3091,12 +3091,12 @@ while :; do
     echo "9. 服务状态"
     echo "10. DNS"
     echo "11. BBR"
-    echo "12. 校验配置"
-    echo "13. 查看日志"
-    echo "14. 更新"
-    echo "15. 卸载"
-    echo "16. 退出"
-    echo "17. 申请真实证书（acme.sh）"
+    echo "12. 申请真实证书（acme.sh）"
+    echo "13. 校验配置"
+    echo "14. 查看日志"
+    echo "15. 更新"
+    echo "16. 卸载"
+    echo "17. 退出"
 
     echo
     printf "请选择："
@@ -3239,23 +3239,35 @@ DNSEOF
             ;;
 
         12)
-            "$BIN" check -c "$BASE/config.json"
+            echo "下载证书申请脚本..."
+            CERT_TOOL="/tmp/sb-cert.sh"
+            if curl -fsSL --max-time 20 -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/loser641/singbox-deploy/contents/cert.sh" -o "$CERT_TOOL"; then
+                sh "$CERT_TOOL"
+                rm -f "$CERT_TOOL"
+            else
+                echo "下载失败，请检查网络。"
+            fi
             pause
             ;;
 
         13)
+            "$BIN" check -c "$BASE/config.json"
+            pause
+            ;;
+
+        14)
             if command -v journalctl >/dev/null 2>&1; then
                 journalctl -u sing-box --no-pager -n 100
             fi
             pause
             ;;
 
-        14)
+        15)
             update_menu
             pause
             ;;
 
-        15)
+        16)
             echo
             if ask_yes_no "确认卸载？"; then
                 service_stop 2>/dev/null || true
@@ -3279,20 +3291,8 @@ DNSEOF
             fi
             ;;
 
-        16)
-            exit 0
-            ;;
-
         17)
-            echo "下载证书申请脚本..."
-            CERT_TOOL="/tmp/sb-cert.sh"
-            if curl -fsSL --max-time 20 -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/loser641/singbox-deploy/contents/cert.sh" -o "$CERT_TOOL"; then
-                sh "$CERT_TOOL"
-                rm -f "$CERT_TOOL"
-            else
-                echo "下载失败，请检查网络。"
-            fi
-            pause
+            exit 0
             ;;
 
     esac
