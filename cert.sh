@@ -182,6 +182,10 @@ fi
 
 echo "[3/4] 申请证书（$METHOD / $DOMAIN）..."
 
+MARK="/tmp/.sb-cert-issue-marker"
+touch "$MARK"
+sleep 1
+
 if [ -n "$STAGING" ]; then
     CA_OPT="--staging"
 else
@@ -190,22 +194,23 @@ fi
 
 case "$METHOD" in
     dns_cf)
-        "$ACME" --issue -d "$DOMAIN" --dns dns_cf $CA_OPT
+        "$ACME" --issue --force -d "$DOMAIN" --dns dns_cf $CA_OPT
         ;;
     standalone)
-        "$ACME" --issue -d "$DOMAIN" --standalone $CA_OPT
+        "$ACME" --issue --force -d "$DOMAIN" --standalone $CA_OPT
         ;;
     webroot)
-        "$ACME" --issue -d "$DOMAIN" -w "$WEBROOT" $CA_OPT
+        "$ACME" --issue --force -d "$DOMAIN" -w "$WEBROOT" $CA_OPT
         ;;
 esac
 
 ISSUE_OK=""
 for d in "$HOME/.acme.sh/${DOMAIN}_ecc" "$HOME/.acme.sh/$DOMAIN"; do
-    if [ -s "$d/fullchain.cer" ]; then
+    if [ -s "$d/fullchain.cer" ] && [ "$d/fullchain.cer" -nt "$MARK" ]; then
         ISSUE_OK=1
     fi
 done
+rm -f "$MARK"
 
 if [ -z "$ISSUE_OK" ]; then
     echo "签发失败（详见上方 acme 输出），原有证书未改动。"
