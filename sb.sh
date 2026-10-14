@@ -33,7 +33,7 @@
 
 set -u
 
-SCRIPT_VERSION="2026.10.14"
+SCRIPT_VERSION="2026.10.14.1"
 
 BIN="/usr/local/bin/sing-box"
 BASE="/etc/sing-box"
@@ -346,10 +346,13 @@ generate_certificate() {
     CRT="$CERT_DIR/www.bing.com.crt"
     KEY="$CERT_DIR/www.bing.com.key"
 
-    if [ -f "$CRT" ] && [ -f "$KEY" ]; then
-        echo "[+] 已存在 www.bing.com 证书。"
+    if [ -s "$CRT" ] && [ -s "$KEY" ]; then
+        echo "[+] 已存在 www.bing.com 证书（含 acme 真证书），直接复用。"
         return
     fi
+
+    # 残缺证书（空文件或缺一半）清掉重新生成，避免新旧混用
+    rm -f "$CRT" "$KEY"
 
     echo
     echo "=========================================="
@@ -445,7 +448,7 @@ EOF
 
 ensure_certificate() {
 
-    if [ -f "$CERT_DIR/www.bing.com.crt" ] && [ -f "$CERT_DIR/www.bing.com.key" ]; then
+    if [ -s "$CERT_DIR/www.bing.com.crt" ] && [ -s "$CERT_DIR/www.bing.com.key" ]; then
         return
     fi
 
@@ -3093,6 +3096,7 @@ while :; do
     echo "14. 更新"
     echo "15. 卸载"
     echo "16. 退出"
+    echo "17. 申请真实证书（acme.sh）"
 
     echo
     printf "请选择："
@@ -3277,6 +3281,18 @@ DNSEOF
 
         16)
             exit 0
+            ;;
+
+        17)
+            echo "下载证书申请脚本..."
+            CERT_TOOL="/tmp/sb-cert.sh"
+            if curl -fsSL --max-time 20 -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/loser641/singbox-deploy/contents/cert.sh" -o "$CERT_TOOL"; then
+                sh "$CERT_TOOL"
+                rm -f "$CERT_TOOL"
+            else
+                echo "下载失败，请检查网络。"
+            fi
+            pause
             ;;
 
     esac

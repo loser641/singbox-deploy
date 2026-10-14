@@ -18,6 +18,8 @@ sing-box 多协议一键部署脚本，**专为低配 Alpine NAT 小鸡设计**�
 
 - 凭据（UUID / 密码 / ShortID）由**内核随机源**生成，REALITY 密钥对自动重试生成——不拉起多余进程，杜绝小内存 OOM 产生空凭据
 - **TLS 证书由 Cloudflare Worker（ssl.641666.xyz）在边缘生成**：每次全新密钥对、100 年有效期、CN=www.bing.com，VPS 只需 curl 拉取，**无需安装 openssl**（仅当证书服务不可用时回退本地 openssl 生成）
+- **证书复用优先**：`/etc/sing-box/cert` 下已有证书（含 acme 真实证书）就直接用，不重新生成、不覆盖——添加协议、重装脚本都不会换证书，固定证书 PEM 长期有效
+- **真实证书申请（可选）**：独立脚本 [`cert.sh`](cert.sh)（acme.sh，选择时才下载），DNS / HTTP 验证、自动续期，面板 `17` 一键调用
 - 支持**多选部署**：一次输入 `1,4,6` 可同时添加多个协议
 - 节点备注格式：`出口国家简称-协议名`，如 `DE-reality`、`US-reality免流`、`SG-anyreality`，国家简称**自动识别出口 IP 归属地**
 - 部署完成后直接列出所有节点分享信息 + **TLS 固定证书 PEM**，方便客户端导入
@@ -60,6 +62,7 @@ sh -c "$(curl -fsSL https://github.com/loser641/singbox-deploy/raw/main/sb.sh)"
 5. 分享链接（含 TLS 固定证书 PEM）
 6. 启动         11. BBR（可一键启用）
                12. 校验配置
+17. 申请真实证书（acme.sh，独立脚本 cert.sh）
 ```
 
 面板启动不联网、不拉起多余进程（更新检查只在进入"14. 更新"时才运行）——小内存机器上任何一次进程尖峰都可能触发 OOM，能省则省。
@@ -72,7 +75,25 @@ TUIC / AnyTLS / Hysteria2 客户端默认开启 `allow_insecure`。更安全的�
 2. v2rayN：节点设置 → 固定证书 → 粘贴 PEM（或"获取证书"）→ 自动禁用跳过证书验证；
 3. SNI 保持 `www.bing.com` 不变（伪装不受影响），同机器所有节点共用同一张证书。
 
-注意：证书每次安装随机生成（避免共享私钥），**重装后需重新固定**。
+注意：自签名证书**只生成一次**，之后一直复用（添加协议 / 重装脚本都不换）；只有删除 `/etc/sing-box/cert` 或换机器才会生成新证书，届时需重新固定。
+
+## 真实证书（可选，acme.sh）
+
+不想固定证书、想用受信任的真实证书时，用独立脚本 `cert.sh` 申请。acme 逻辑**不在主脚本里**（修 acme 部分不影响主脚本），acme.sh 也是**选择时才下载**：
+
+- 面板 `lsb` → `17. 申请真实证书`，或直接运行：
+
+```bash
+sh -c "$(wget -qO- https://github.com/loser641/singbox-deploy/raw/main/cert.sh)"
+```
+
+- 验证方式：
+  - **DNS（Cloudflare）**：NAT 小鸡 / 80 端口不通时用，需要 Cloudflare API Token（Zone.DNS Edit 权限）+ Account ID
+  - **HTTP standalone**：需要 80 端口公网可达（会装 socat）
+  - **webroot**：已有网站目录时用
+- 支持 `--staging`：先用 Let's Encrypt 测试证书跑通流程，再申请正式证书
+- 证书装入 `/etc/sing-box/cert/`（主脚本自动复用，不会被自签名覆盖）；acme.sh 定时自动续期，续期后自动重启 sing-box
+- 客户端：SNI / 服务器名填申请的域名，按系统根证书校验（关闭 allow_insecure），**无需固定证书**；REALITY 类节点不使用此证书
 
 ## 配置目录
 
