@@ -33,7 +33,7 @@
 
 set -u
 
-SCRIPT_VERSION="2026.10.15.2"
+SCRIPT_VERSION="2026.10.15.3"
 
 BIN="/usr/local/bin/sing-box"
 BASE="/etc/sing-box"
@@ -1859,6 +1859,8 @@ generate_links() {
 
             PASSWORD="$(jq -r '.users[0].password' "$FILE")"
 
+            PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')"
+
             if jq -e '.tls.reality.enabled == true' "$FILE" >/dev/null 2>&1; then
 
                 SNI="$(jq -r '.tls.server_name' "$FILE")"
@@ -1873,31 +1875,11 @@ generate_links() {
                     PBK=""
                 fi
 
-                {
-                    echo "protocol=anytls"
-                    echo "server=${IP}"
-                    echo "port=${PORT}"
-                    echo "password=${PASSWORD}"
-                    echo "tls=enabled"
-                    echo "sni=${SNI}"
-                    echo "security=reality"
-                    echo "pbk=${PBK}"
-                    echo "sid=${SID}"
-                    echo "fp=chrome"
-                    echo "remark=${REMARK}"
-                } > "$LINK_DIR/$TAG.txt"
+                echo "anytls://${PASSWORD_ENC}@${IP}:${PORT}?security=reality&sni=${SNI}&fp=chrome&pbk=${PBK}&sid=${SID}&type=tcp&headerType=none#${REMARK}"                     > "$LINK_DIR/$TAG.txt"
 
             else
 
-                {
-                    echo "protocol=anytls"
-                    echo "server=${IP}"
-                    echo "port=${PORT}"
-                    echo "password=${PASSWORD}"
-                    echo "sni=www.bing.com"
-                    echo "allow_insecure=true"
-                    echo "remark=${REMARK}"
-                } > "$LINK_DIR/$TAG.txt"
+                echo "anytls://${PASSWORD_ENC}@${IP}:${PORT}?insecure=1&security=tls&sni=www.bing.com&type=tcp&headerType=none#${REMARK}"                     > "$LINK_DIR/$TAG.txt"
 
             fi
             ;;
@@ -3470,6 +3452,8 @@ for FILE in "$BASE/inbounds"/*.json; do
 
         PASSWORD="$(jq -r '.users[0].password' "$FILE")"
 
+        PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')"
+
         if jq -e '.tls.reality.enabled == true' "$FILE" >/dev/null 2>&1; then
 
             SNI="$(jq -r '.tls.server_name' "$FILE")"
@@ -3482,31 +3466,13 @@ for FILE in "$BASE/inbounds"/*.json; do
                 PBK="$(sed -n 's/^PUBLIC_KEY=//p' "$INFO")"
             fi
 
-            {
-                echo "protocol=anytls"
-                echo "server=$IP"
-                echo "port=$PORT"
-                echo "password=$PASSWORD"
-                echo "tls=enabled"
-                echo "sni=$SNI"
-                echo "security=reality"
-                echo "pbk=$PBK"
-                echo "sid=$SID"
-                echo "fp=chrome"
-                echo "remark=$REMARK"
-            } > "$LINK_DIR/$TAG.txt"
+            printf '%s
+'                 "anytls://${PASSWORD_ENC}@${IP}:${PORT}?security=reality&sni=${SNI}&fp=chrome&pbk=${PBK}&sid=${SID}&type=tcp&headerType=none#${REMARK}"                 > "$LINK_DIR/$TAG.txt"
 
         else
 
-            {
-                echo "protocol=anytls"
-                echo "server=$IP"
-                echo "port=$PORT"
-                echo "password=$PASSWORD"
-                echo "sni=www.bing.com"
-                echo "allow_insecure=true"
-                echo "remark=$REMARK"
-            } > "$LINK_DIR/$TAG.txt"
+            printf '%s
+'                 "anytls://${PASSWORD_ENC}@${IP}:${PORT}?insecure=1&security=tls&sni=www.bing.com&type=tcp&headerType=none#${REMARK}"                 > "$LINK_DIR/$TAG.txt"
 
         fi
         ;;
