@@ -109,15 +109,9 @@ work_dir() {
 }
 
 rate_opt() {
-    # 按可用内存分档限速：解压写入速率约是下载速率的 3 倍，
-    # 速率过高时脏页会顶破小内存机器的上限触发 OOM
-    AVAIL_KB="$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
-
-    if [ "${AVAIL_KB:-0}" -lt 131072 ] 2>/dev/null; then
-        echo "--limit-rate=2m"
-    elif [ "${AVAIL_KB:-0}" -lt 262144 ] 2>/dev/null; then
-        echo "--limit-rate=4m"
-    fi
+    # 项目默认目标是 64MB 小内存 Alpine NAT 机，不做机器探测（NAT 机内存
+    # 读数不准）。限速压住解压脏页的生成速率，避免触发 OOM
+    echo "--limit-rate=2m"
 }
 
 # ==========================================================
@@ -2450,15 +2444,9 @@ work_dir() {
 }
 
 rate_opt() {
-    # 按可用内存分档限速：解压写入速率约是下载速率的 3 倍，
-    # 速率过高时脏页会顶破小内存机器的上限触发 OOM
-    AVAIL_KB="$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
-
-    if [ "${AVAIL_KB:-0}" -lt 131072 ] 2>/dev/null; then
-        echo "--limit-rate=2m"
-    elif [ "${AVAIL_KB:-0}" -lt 262144 ] 2>/dev/null; then
-        echo "--limit-rate=4m"
-    fi
+    # 项目默认目标是 64MB 小内存 Alpine NAT 机，不做机器探测（NAT 机内存
+    # 读数不准）。限速压住解压脏页的生成速率，避免触发 OOM
+    echo "--limit-rate=2m"
 }
 
 enable_bbr() {
@@ -2898,12 +2886,6 @@ show_links() {
 
 check_updates() {
 
-    # 小内存机器跳过联网检查（curl/jq 进程尖峰可能触发 OOM 杀掉运行中的服务）
-    AVAIL_KB="$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
-    if [ "${AVAIL_KB:-0}" -lt 262144 ] 2>/dev/null; then
-        return
-    fi
-
     HINT="$BASE/update-hint"
     LAST="$BASE/.last-update-check"
 
@@ -2928,7 +2910,7 @@ check_updates() {
         echo "[!] sing-box 内核有新版本：$CURRENT_K -> $LATEST_K（选 14 更新）" >> "$HINT"
     fi
 
-    REMOTE_SV="$(curl -fsSL --max-time 5 "https://raw.githubusercontent.com/loser641/singbox-deploy/main/install-singbox.sh" 2>/dev/null | sed -n 's/^SCRIPT_VERSION="\([^"]*\)".*/\1/p' | head -n 1)"
+    REMOTE_SV="$(curl -fsSL --max-time 5 -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/loser641/singbox-deploy/contents/install-singbox.sh" 2>/dev/null | sed -n 's/^SCRIPT_VERSION="\([^"]*\)".*/\1/p' | head -n 1)"
 
     LOCAL_SV="$(cat "$BASE/script-version" 2>/dev/null)"
 
@@ -3039,6 +3021,9 @@ update_menu() {
     echo "=========================================="
     echo " 更新"
     echo "=========================================="
+
+    check_updates
+
     echo
     echo "1. 更新脚本"
     echo "2. 更新 sing-box 内核"
@@ -3050,7 +3035,7 @@ update_menu() {
     case "$U" in
         1)
             echo "下载最新脚本..."
-            curl -fsSL --max-time 20 "https://raw.githubusercontent.com/loser641/singbox-deploy/main/install-singbox.sh" -o /usr/local/bin/install-singbox.sh || {
+            curl -fsSL --max-time 20 -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/loser641/singbox-deploy/contents/install-singbox.sh" -o /usr/local/bin/install-singbox.sh || {
                 echo "下载失败。"
                 return
             }
@@ -3083,8 +3068,6 @@ while :; do
 
     echo
 
-    check_updates
-
     list_configs
 
     echo
@@ -3114,7 +3097,7 @@ while :; do
         1)
             if [ ! -x /usr/local/bin/install-singbox.sh ] || ! grep -q -- '--add-config' /usr/local/bin/install-singbox.sh; then
                 echo "下载安装脚本..."
-                curl -fsSL --max-time 20 "https://raw.githubusercontent.com/loser641/singbox-deploy/main/install-singbox.sh" -o /usr/local/bin/install-singbox.sh || {
+                curl -fsSL --max-time 20 -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/loser641/singbox-deploy/contents/install-singbox.sh" -o /usr/local/bin/install-singbox.sh || {
                     echo "下载失败，请检查网络。"
                     pause
                     continue
