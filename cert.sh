@@ -157,9 +157,9 @@ if [ -n "$MISSING" ]; then
     if [ -f /etc/alpine-release ]; then
         # 64MB 小内存：先停 sing-box 腾出内存，避免 apk 被 OOM 杀掉（装完立即拉起）
         WAS_RUNNING=""
-        if pgrep -f "sing-box[.]run" >/dev/null 2>&1; then
+        if pgrep -f "^/usr/local/bin/sing-box" >/dev/null 2>&1; then
             WAS_RUNNING=1
-            pkill -f "sing-box[.]run" 2>/dev/null
+            pkill -f "^/usr/local/bin/sing-box" 2>/dev/null
             sleep 1
         fi
         APK_OK=""
@@ -173,7 +173,7 @@ if [ -n "$MISSING" ]; then
         if [ -n "$WAS_RUNNING" ]; then
             GOMEMLIMIT=24MiB /usr/local/bin/sing-box run -c "$BASE/config.json" >/dev/null 2>&1 &
             sleep 2
-            echo 800 > /proc/$(pgrep -f "sing-box[.]run" | head -1)/oom_score_adj 2>/dev/null
+            echo 800 > /proc/$(pgrep -f "^/usr/local/bin/sing-box" | head -1)/oom_score_adj 2>/dev/null
         fi
         [ -n "$APK_OK" ] || { echo "依赖安装失败：$MISSING"; exit 1; }
     elif command_exists apt-get; then
@@ -250,7 +250,7 @@ rm -f "$TMP_CRT" "$TMP_KEY"
 if command_exists systemctl; then
     RELOAD="if [ -s $TMP_CRT ] && [ -s $TMP_KEY ]; then mv $TMP_CRT $CRT; mv $TMP_KEY $KEY; chmod 600 $KEY; chmod 644 $CRT; fi; systemctl restart sing-box >/dev/null 2>&1 || true"
 else
-    RELOAD="if [ -s $TMP_CRT ] && [ -s $TMP_KEY ]; then mv $TMP_CRT $CRT; mv $TMP_KEY $KEY; chmod 600 $KEY; chmod 644 $CRT; fi; pkill -f sing-box[.]run 2>/dev/null; sleep 1; GOMEMLIMIT=24MiB /usr/local/bin/sing-box run -c $BASE/config.json >/dev/null 2>&1 & sleep 2; echo 800 > /proc/\$(pgrep -f sing-box[.]run | head -1)/oom_score_adj 2>/dev/null; true"
+    RELOAD="if [ -s $TMP_CRT ] && [ -s $TMP_KEY ]; then mv $TMP_CRT $CRT; mv $TMP_KEY $KEY; chmod 600 $KEY; chmod 644 $CRT; fi; pkill -f ^/usr/local/bin/sing-box 2>/dev/null; sleep 1; GOMEMLIMIT=24MiB /usr/local/bin/sing-box run -c $BASE/config.json >/dev/null 2>&1 & sleep 2; echo 800 > /proc/\$(pgrep -f ^/usr/local/bin/sing-box | head -1)/oom_score_adj 2>/dev/null; true"
 fi
 
 "$ACME" --install-cert -d "$DOMAIN" --fullchain-file "$TMP_CRT" --key-file "$TMP_KEY" --reloadcmd "$RELOAD" || {
