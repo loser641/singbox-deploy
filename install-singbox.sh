@@ -335,6 +335,8 @@ install_singbox() {
 
     rm -rf "$TMP"
 
+    printf '%s\n' "$VERSION" > "$BASE/sing-box-version"
+
     echo
     "$BIN" version
 }
@@ -1372,10 +1374,11 @@ install_service() {
         rm -f /etc/init.d/sing-box
 
         CRON_LINE="@reboot GOMEMLIMIT=48MiB $BIN run -c $CONFIG > /dev/null 2>&1 &"
+        WATCHDOG="* * * * * pgrep -x sing-box >/dev/null 2>&1 || GOMEMLIMIT=48MiB $BIN run -c $CONFIG > /dev/null 2>&1 &"
 
         (
-            crontab -l 2>/dev/null | grep -v '@reboot.*sing-box run' || true
-            printf '%s\n' "$CRON_LINE"
+            crontab -l 2>/dev/null | grep -v '@reboot.*sing-box run' | grep -v 'pgrep -x sing-box' || true
+            printf '%s\n%s\n' "$CRON_LINE" "$WATCHDOG"
         ) | crontab -
 
         echo "[+] 已配置 crontab 开机自启："
@@ -1987,7 +1990,12 @@ management_panel() {
         echo "================================================"
         echo
 
-        "$BIN" version 2>/dev/null | head -n 1
+        VER="$(cat "$BASE/sing-box-version" 2>/dev/null)"
+        if [ -n "$VER" ]; then
+            echo "sing-box version $VER"
+        else
+            "$BIN" version 2>/dev/null | head -n 1
+        fi
 
         echo
 
@@ -2872,6 +2880,12 @@ show_links() {
 
 check_updates() {
 
+    # 小内存机器跳过联网检查（curl/jq 进程尖峰可能触发 OOM 杀掉运行中的服务）
+    AVAIL_KB="$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+    if [ "${AVAIL_KB:-0}" -lt 262144 ] 2>/dev/null; then
+        return
+    fi
+
     HINT="$BASE/update-hint"
     LAST="$BASE/.last-update-check"
 
@@ -2889,7 +2903,8 @@ check_updates() {
 
     LATEST_K="$(curl -fsSL --max-time 5 "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" 2>/dev/null | jq -r '[.[] | select(.prerelease == false)][0].tag_name' 2>/dev/null | tr -d 'v')"
 
-    CURRENT_K="$("$BIN" version 2>/dev/null | head -n 1 | awk '{print $3}')"
+    CURRENT_K="$(cat "$BASE/sing-box-version" 2>/dev/null)"
+    [ -n "$CURRENT_K" ] || CURRENT_K="$("$BIN" version 2>/dev/null | head -n 1 | awk '{print $3}')"
 
     if [ -n "$LATEST_K" ] && [ -n "$CURRENT_K" ] && [ "$LATEST_K" != "$CURRENT_K" ]; then
         echo "[!] sing-box 内核有新版本：$CURRENT_K -> $LATEST_K（选 14 更新）" >> "$HINT"
@@ -2994,6 +3009,8 @@ update_kernel() {
 
     rm -f "$BASE/update-hint" "$BASE/.last-update-check"
 
+    printf '%s\n' "$V" > "$BASE/sing-box-version"
+
     echo
     echo "sing-box 已更新到 $V"
 }
@@ -3039,7 +3056,12 @@ while :; do
 
     echo
 
-    "$BIN" version 2>/dev/null | head -n 1
+    VER="$(cat "$BASE/sing-box-version" 2>/dev/null)"
+    if [ -n "$VER" ]; then
+        echo "sing-box version $VER"
+    else
+        "$BIN" version 2>/dev/null | head -n 1
+    fi
 
     echo
 
@@ -3564,6 +3586,14 @@ initial_setup() {
         cat "$FILE"
         echo
     done
+
+    if [ -f "$CERT_DIR/www.bing.com.crt" ]; then
+        echo "===== TLS 固定证书（可选，替代跳过证书验证）====="
+        echo "v2rayN：节点设置 → 固定证书 → 粘贴下方 PEM（自动禁用跳过验证）"
+        echo
+        cat "$CERT_DIR/www.bing.com.crt"
+        echo
+    fi
 
     echo "管理面板："
     echo
