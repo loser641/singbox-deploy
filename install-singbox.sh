@@ -774,7 +774,7 @@ add_vless_reality_free() {
 }
 EOF
 
-    save_info "vless-reality-free" \
+    save_info "$TAG" \
         "UUID=$UUID" \
         "PUBLIC_KEY=$PUBLIC_KEY" \
         "SHORT_ID=$SHORT_ID" \
@@ -1392,6 +1392,10 @@ GOMEMLIMIT=48MiB $BIN run -c $CONFIG > /dev/null 2>&1 &
 SDEOF
 
         chmod +x /etc/local.d/sing-box.start
+
+        # local.d 只有 local 服务被启用才会执行；crontab 依赖 crond 运行——都加入开机
+        [ -x /etc/init.d/local ] && rc-update add local default >/dev/null 2>&1
+        [ -x /etc/init.d/crond ] && rc-update add crond default >/dev/null 2>&1
 
         echo "[+] 已配置 crontab 开机自启："
         crontab -l 2>/dev/null | grep '@reboot.*sing-box run' || true
