@@ -93,7 +93,22 @@ Naive（HTTP/2 CONNECT 代理）依赖 sing-box 官方完整内核，裁剪版�
 3. 脚本自动生成用户名 `user1` / 随机密码，端口默认随机，可自定义；
 4. 分享链接格式：`naive+https://用户名:密码@IP:端口?sni=域名`。
 
-> Naive 走标准 TLS，**强烈建议配真实证书**（面板 12 → acme 或已有证书目录）。自签证书只能靠客户端跳过验证，兼容性较差。Naive 只转发 TCP（`network: tcp`），不支持 UDP。
+服务端同时监听 **TCP（HTTP/2）与 UDP（HTTP/3）**，配置如下：
+
+```json
+{
+  "quic_congestion_control": "bbr",
+  "tls": { "alpn": ["h2", "h3"] }
+}
+```
+
+- **不写 `network`**：留空即同时开启 TCP + UDP。写成 `"network": ""` 会报 `unknown network:` 直接启动失败，写 `"tcp"` 则关闭 HTTP/3。
+- **`alpn` 顺序是 `h2` 在前**：sing-box 按服务端顺序优先协商，`h3` 排在前面会让同时提供两者的客户端在 TCP 上协商到 h3 而失败。
+- **`quic_congestion_control`**（`bbr`/`cubic`/`reno`，默认 bbr）只在 UDP 开启时生效。
+
+> Naive 走标准 TLS，**强烈建议配真实证书**（面板 12 → acme 或已有证书目录）。自签证书只能靠客户端跳过验证，兼容性较差。
+>
+> HTTP/3 需要 UDP 端口可达；若机器在 NAT 后未映射 UDP，客户端会自动回落到 TCP 上的 HTTP/2，不影响使用。
 
 ## TLS 证书固定（可选，替代跳过证书验证）
 

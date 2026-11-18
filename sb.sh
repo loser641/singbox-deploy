@@ -35,7 +35,7 @@
 
 set -u
 
-SCRIPT_VERSION="2026.11.18.1"
+SCRIPT_VERSION="2026.11.18.2"
 
 BIN="/usr/local/bin/sing-box"
 BASE="/etc/sing-box"
@@ -1510,7 +1510,7 @@ add_naive() {
   "tag": "$TAG",
   "listen": "::",
   "listen_port": $PORT,
-  "network": "tcp",
+  "quic_congestion_control": "bbr",
   "users": [
     {
       "username": "$USERNAME",
@@ -1521,7 +1521,8 @@ add_naive() {
     "enabled": true,
     "server_name": "$CERT_SNI",
     "alpn": [
-      "h2"
+      "h2",
+      "h3"
     ],
     "min_version": "1.2",
     "certificate_path": "$CERT_CRT",
