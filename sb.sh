@@ -16,12 +16,14 @@
 #   AnyReality (AnyTLS + REALITY)
 #   Shadowsocks
 #   Hysteria2
+#   Naive（仅官方完整内核，sing-box 1.13+）
 #
 # Features:
 #   - Auto detect architecture
-#   - Latest stable sing-box
+#   - 默认低内存裁剪版内核（可切换官方完整版）
 #   - UUID / Reality KeyPair / ShortID
 #   - 100-year self-signed www.bing.com certificate
+#   - 支持指定已有证书目录（自动扫描 fullchain.pem / privkey.pem）
 #   - BBR auto enable
 #   - Custom DNS
 #   - Interactive configuration
@@ -33,18 +35,47 @@
 
 set -u
 
-SCRIPT_VERSION="2026.10.15.3"
+SCRIPT_VERSION="2026.11.18.1"
 
 BIN="/usr/local/bin/sing-box"
 BASE="/etc/sing-box"
 INBOUND_DIR="$BASE/inbounds"
 LINK_DIR="$BASE/links"
-CERT_DIR="$BASE/cert"
 CONFIG="$BASE/config.json"
 INFO="$BASE/server-info"
 COUNTRY="US"
 
+# TLS 证书：默认脚本自签；cert-source.conf 可指向已有证书目录
+CERT_DIR="$BASE/cert"
+CERT_CRT="$CERT_DIR/www.bing.com.crt"
+CERT_KEY="$CERT_DIR/www.bing.com.key"
+CERT_SNI="www.bing.com"
+CERT_INSECURE="1"
+CERT_SRC_CONF="$BASE/cert-source.conf"
+
 mkdir -p "$BASE"
+
+load_cert_source() {
+
+    CERT_CRT="$CERT_DIR/www.bing.com.crt"
+    CERT_KEY="$CERT_DIR/www.bing.com.key"
+    CERT_SNI="www.bing.com"
+    CERT_INSECURE="1"
+
+    [ -f "$CERT_SRC_CONF" ] || return 0
+
+    . "$CERT_SRC_CONF"
+
+    # 外部证书被移走时回退自签，避免配置指向不存在的文件
+    if [ ! -s "$CERT_CRT" ] || [ ! -s "$CERT_KEY" ]; then
+        CERT_CRT="$CERT_DIR/www.bing.com.crt"
+        CERT_KEY="$CERT_DIR/www.bing.com.key"
+        CERT_SNI="www.bing.com"
+        CERT_INSECURE="1"
+    fi
+}
+
+load_cert_source
 
 if [ "$(id -u)" != "0" ]; then
     echo "请使用 root 运行。"
@@ -112,6 +143,36 @@ rate_opt() {
     # 项目默认目标是 64MB 小内存 Alpine NAT 机，不做机器探测（NAT 机内存
     # 读数不准）。限速压住解压脏页的生成速率，避免触发 OOM
     echo "--limit-rate=2m"
+}
+
+# 内核类型：lite（裁剪版）/ official（官方完整版）
+kernel_version() {
+
+    V="$(cat "$BASE/sing-box-version" 2>/dev/null)"
+
+    if [ -z "$V" ] && [ -x "$BIN" ]; then
+        V="$("$BIN" version 2>/dev/null | head -n 1 | awk '{print $3}')"
+    fi
+
+    printf '%s' "$V"
+}
+
+kernel_flavor() {
+
+    F="$(cat "$BASE/kernel-flavor" 2>/dev/null)"
+
+    case "$F" in
+        lite|official)
+            printf '%s' "$F"
+            return
+            ;;
+    esac
+
+    # 兼容旧版本安装：从版本号判断
+    case "$(kernel_version)" in
+        *lite*) printf '%s' lite ;;
+        *) printf '%s' official ;;
+    esac
 }
 
 # ==========================================================
@@ -219,6 +280,28 @@ install_dependencies() {
 # Latest Stable sing-box
 # ==========================================================
 
+# 安装时选择内核：SB_KERNEL 环境变量优先，默认裁剪版
+select_kernel_flavor() {
+
+    [ -n "${SB_KERNEL:-}" ] && return 0
+
+    echo
+    echo "=========================================="
+    echo " 内核选择"
+    echo "=========================================="
+    echo
+    echo "1. 裁剪版 sing-box-lite（默认，体积小/低内存，不含 Naive）"
+    echo "2. 官方完整版 sing-box（含全部协议，含 Naive，体积大/内存占用高）"
+    echo
+    printf "请选择 [1]: "
+    read K
+
+    case "$K" in
+        2) SB_KERNEL="official" ;;
+        *) SB_KERNEL="lite" ;;
+    esac
+}
+
 install_singbox() {
 
     echo
@@ -226,13 +309,18 @@ install_singbox() {
     echo " 下载最新稳定版 sing-box"
     echo "=========================================="
 
-    if [ "${SB_KERNEL:-official}" = "lite" ]; then
+    # 已安装时保持当前内核类型，避免"更新内核"把官方版换成裁剪版
+    if [ -z "${SB_KERNEL:-}" ] && [ -f "$BASE/kernel-flavor" ]; then
+        SB_KERNEL="$(kernel_flavor)"
+    fi
+
+    if [ "${SB_KERNEL:-lite}" = "lite" ]; then
 
         LTAG="$(curl -fsSL --max-time 10 "https://api.github.com/repos/loser641/sing-box-lite/releases/latest" 2>/dev/null | jq -r .tag_name 2>/dev/null)"
 
         if [ -z "$LTAG" ] || [ "$LTAG" = "null" ]; then
             echo "无法获取低内存裁剪版最新版本。"
-            echo "请检查网络，或不设 SB_KERNEL=lite 使用官方内核。"
+            echo "请检查网络，或设 SB_KERNEL=official 使用官方内核。"
             exit 1
         fi
 
@@ -351,6 +439,11 @@ install_singbox() {
 
     printf '%s\n' "$VERSION" > "$BASE/sing-box-version"
 
+    case "$VERSION" in
+        *lite*) printf '%s\n' lite > "$BASE/kernel-flavor" ;;
+        *) printf '%s\n' official > "$BASE/kernel-flavor" ;;
+    esac
+
     echo
     "$BIN" version
 }
@@ -463,16 +556,318 @@ EOF
 }
 
 # ==========================================================
-# Ensure certificate (only needed by TUIC / AnyTLS / Hysteria2)
+# Ensure certificate (TLS inbounds)
 # ==========================================================
 
 ensure_certificate() {
 
-    if [ -s "$CERT_DIR/www.bing.com.crt" ] && [ -s "$CERT_DIR/www.bing.com.key" ]; then
+    if [ -s "$CERT_CRT" ] && [ -s "$CERT_KEY" ]; then
         return
     fi
 
     generate_certificate
+}
+
+# ==========================================================
+# Certificate source (self-signed / existing directory)
+# ==========================================================
+
+# 在目录中递归查找同目录下的 fullchain.pem + privkey.pem
+# 输出：证书路径|私钥路径
+cert_scan_dir() {
+
+    DIR="$1"
+
+    [ -d "$DIR" ] || return 1
+
+    LIST="$BASE/.cert-scan.$$"
+
+    find "$DIR" -maxdepth 6 -type f \
+        \( -name fullchain.pem -o -name privkey.pem \) \
+        2>/dev/null > "$LIST"
+
+    FIRST_CRT=""
+    FIRST_KEY=""
+
+    while IFS= read -r F; do
+
+        case "$F" in
+            */fullchain.pem)
+                D="$(dirname "$F")"
+                if [ -s "$D/privkey.pem" ]; then
+                    rm -f "$LIST"
+                    printf '%s|%s\n' "$F" "$D/privkey.pem"
+                    return 0
+                fi
+                [ -n "$FIRST_CRT" ] || FIRST_CRT="$F"
+                ;;
+            */privkey.pem)
+                [ -n "$FIRST_KEY" ] || FIRST_KEY="$F"
+                ;;
+        esac
+
+    done < "$LIST"
+
+    rm -f "$LIST"
+
+    if [ -n "$FIRST_CRT" ] && [ -n "$FIRST_KEY" ]; then
+        printf '%s|%s\n' "$FIRST_CRT" "$FIRST_KEY"
+        return 0
+    fi
+
+    return 1
+}
+
+# 从证书中取域名（优先 SAN，其次 CN）
+cert_sni_from_crt() {
+
+    [ -s "$1" ] || return 1
+    command_exists openssl || return 1
+
+    SNI="$(openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null |
+        tr ', ' '\n\n' |
+        sed -n 's/^DNS://p' |
+        head -n 1)"
+
+    if [ -z "$SNI" ]; then
+        SNI="$(openssl x509 -in "$1" -noout -subject 2>/dev/null |
+            sed -n 's/.*CN *= *//p' |
+            sed 's/,.*//' |
+            head -n 1)"
+    fi
+
+    [ -n "$SNI" ] || return 1
+
+    printf '%s' "$SNI"
+}
+
+write_cert_source() {
+
+    mkdir -p "$BASE"
+
+    {
+        printf "CERT_CRT='%s'\n" "$CERT_CRT"
+        printf "CERT_KEY='%s'\n" "$CERT_KEY"
+        printf "CERT_SNI='%s'\n" "$CERT_SNI"
+        printf "CERT_INSECURE='%s'\n" "$CERT_INSECURE"
+    } > "$CERT_SRC_CONF"
+
+    chmod 600 "$CERT_SRC_CONF"
+}
+
+cert_using_external() {
+
+    [ "$CERT_CRT" != "$CERT_DIR/www.bing.com.crt" ]
+}
+
+# 把当前证书路径/SNI 同步到已有节点
+apply_cert_paths() {
+
+    CHANGED=""
+
+    for F in "$INBOUND_DIR"/*.json; do
+
+        [ -f "$F" ] || continue
+
+        # REALITY 节点不使用证书文件
+        jq -e '.tls != null and (.tls.reality.enabled != true)' "$F" >/dev/null 2>&1 || continue
+
+        TMPF="$F.cert.tmp"
+
+        if jq --arg crt "$CERT_CRT" \
+              --arg key "$CERT_KEY" \
+              --arg sni "$CERT_SNI" \
+              '.tls.certificate_path = $crt
+               | .tls.key_path = $key
+               | .tls.server_name = $sni' \
+              "$F" > "$TMPF" 2>/dev/null; then
+            mv "$TMPF" "$F"
+            CHANGED=1
+        else
+            rm -f "$TMPF"
+        fi
+
+    done
+
+    [ -n "$CHANGED" ] || return 0
+
+    echo "[+] 已刷新现有节点的证书路径。"
+
+    if rebuild_config; then
+        start_service >/dev/null 2>&1 || true
+    fi
+}
+
+# 指定已有证书目录（自动扫描 fullchain.pem / privkey.pem）
+set_cert_dir() {
+
+    DIR="$1"
+
+    [ -n "$DIR" ] || return 1
+    [ -d "$DIR" ] || {
+        echo "目录不存在：$DIR"
+        return 1
+    }
+
+    FOUND="$(cert_scan_dir "$DIR")"
+
+    [ -n "$FOUND" ] || {
+        echo "在 $DIR 中没有找到 fullchain.pem 与 privkey.pem（已递归扫描 6 层）。"
+        return 1
+    }
+
+    NEW_CRT="${FOUND%%|*}"
+    NEW_KEY="${FOUND#*|}"
+
+    NEW_SNI="$(cert_sni_from_crt "$NEW_CRT")"
+
+    if [ -z "$NEW_SNI" ]; then
+        echo "[!] 无法从证书解析域名（证书无 CN/SAN）或未安装 openssl。"
+        printf "请输入证书域名（SNI）: "
+        read NEW_SNI
+    fi
+
+    [ -n "$NEW_SNI" ] || NEW_SNI="www.bing.com"
+
+    CERT_CRT="$NEW_CRT"
+    CERT_KEY="$NEW_KEY"
+    CERT_SNI="$NEW_SNI"
+    CERT_INSECURE="0"
+
+    # 自签证书（issuer == subject）仍需客户端跳过验证
+    ISS="$(openssl x509 -in "$CERT_CRT" -noout -issuer 2>/dev/null | sed 's/^issuer=//')"
+    SUB="$(openssl x509 -in "$CERT_CRT" -noout -subject 2>/dev/null | sed 's/^subject=//')"
+    if [ -n "$ISS" ] && [ "$ISS" = "$SUB" ]; then
+        CERT_INSECURE="1"
+    fi
+
+    write_cert_source
+
+    echo
+    echo "[+] 证书：$CERT_CRT"
+    echo "[+] 私钥：$CERT_KEY"
+    echo "[+] 域名（SNI）：$CERT_SNI"
+
+    if [ "$CERT_INSECURE" = "0" ]; then
+        echo "[+] 客户端可按系统根证书校验（无需跳过验证）"
+    else
+        echo "[+] 检测为自签证书，客户端仍需跳过验证或固定 PEM"
+    fi
+
+    apply_cert_paths
+}
+
+cert_use_selfsigned() {
+
+    rm -f "$CERT_SRC_CONF"
+
+    load_cert_source
+
+    generate_certificate || return 1
+
+    apply_cert_paths
+
+    echo "[+] 已切回脚本自签证书（SNI www.bing.com）。"
+}
+
+cert_menu() {
+
+    load_cert_source
+
+    echo
+    echo "=========================================="
+    echo " TLS 证书管理"
+    echo "=========================================="
+    echo
+
+    if cert_using_external; then
+        echo "当前：已有证书目录"
+        echo "  证书：$CERT_CRT"
+        echo "  私钥：$CERT_KEY"
+        echo "  域名：$CERT_SNI"
+    else
+        echo "当前：脚本自签证书（www.bing.com，客户端跳过验证或固定 PEM）"
+    fi
+
+    echo
+    echo "1. 申请真实证书（acme.sh）"
+    echo "2. 指定已有证书目录（自动扫描 fullchain.pem / privkey.pem）"
+    echo "3. 恢复脚本自签证书"
+    echo "0. 返回"
+    echo
+    printf "请选择："
+    read C
+
+    case "$C" in
+
+        1)
+            if cert_using_external; then
+                echo
+                echo "当前使用外部证书目录，acme 安装的证书不会生效。"
+                echo "如需使用 acme，请先选 3 恢复自签证书。"
+                return
+            fi
+
+            echo "下载证书申请脚本..."
+            CERT_TOOL="/tmp/sb-cert.sh"
+
+            if curl -fsSL --max-time 20 -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/loser641/singbox-deploy/contents/cert.sh" -o "$CERT_TOOL"; then
+                sh "$CERT_TOOL"
+                rm -f "$CERT_TOOL"
+            else
+                echo "下载失败，请检查网络。"
+            fi
+            ;;
+
+        2)
+            printf "证书目录（如 /etc/nginx/cert）："
+            read DIR
+            [ -n "$DIR" ] || {
+                echo "未输入。"
+                return
+            }
+            set_cert_dir "$DIR"
+            ;;
+
+        3)
+            cert_use_selfsigned
+            ;;
+
+        *)
+            echo "未修改。"
+            ;;
+    esac
+}
+
+select_cert_source() {
+
+    load_cert_source
+
+    if cert_using_external && [ -f "$CERT_SRC_CONF" ]; then
+        return 0
+    fi
+
+    echo
+    echo "=========================================="
+    echo " TLS 证书"
+    echo "=========================================="
+    echo
+    echo "1. 脚本自签证书（默认，100 年，客户端跳过验证或固定 PEM）"
+    echo "2. 使用已有证书目录（递归查找 fullchain.pem + privkey.pem）"
+    echo
+    printf "请选择 [1]: "
+    read C
+
+    case "$C" in
+        2)
+            printf "证书目录（如 /etc/nginx/cert）："
+            read DIR
+
+            if [ -n "$DIR" ]; then
+                set_cert_dir "$DIR" || echo "已保持脚本自签证书。"
+            fi
+            ;;
+    esac
 }
 
 # ==========================================================
@@ -651,10 +1046,10 @@ write_standard_tls() {
     cat <<EOF
 "tls": {
   "enabled": true,
-  "server_name": "www.bing.com",
+  "server_name": "$CERT_SNI",
   "min_version": "1.2",
-  "certificate_path": "$CERT_DIR/www.bing.com.crt",
-  "key_path": "$CERT_DIR/www.bing.com.key"
+  "certificate_path": "$CERT_CRT",
+  "key_path": "$CERT_KEY"
 }
 EOF
 }
@@ -849,13 +1244,13 @@ add_tuic() {
   "heartbeat": "10s",
   "tls": {
     "enabled": true,
-    "server_name": "www.bing.com",
+    "server_name": "$CERT_SNI",
     "alpn": [
       "h3"
     ],
     "min_version": "1.2",
-    "certificate_path": "$CERT_DIR/www.bing.com.crt",
-    "key_path": "$CERT_DIR/www.bing.com.key"
+    "certificate_path": "$CERT_CRT",
+    "key_path": "$CERT_KEY"
   }
 }
 EOF
@@ -904,10 +1299,10 @@ add_anytls() {
   ],
   "tls": {
     "enabled": true,
-    "server_name": "www.bing.com",
+    "server_name": "$CERT_SNI",
     "min_version": "1.2",
-    "certificate_path": "$CERT_DIR/www.bing.com.crt",
-    "key_path": "$CERT_DIR/www.bing.com.key"
+    "certificate_path": "$CERT_CRT",
+    "key_path": "$CERT_KEY"
   }
 }
 EOF
@@ -1042,13 +1437,13 @@ add_hysteria2() {
   ],
   "tls": {
     "enabled": true,
-    "server_name": "www.bing.com",
+    "server_name": "$CERT_SNI",
     "alpn": [
       "h3"
     ],
     "min_version": "1.2",
-    "certificate_path": "$CERT_DIR/www.bing.com.crt",
-    "key_path": "$CERT_DIR/www.bing.com.key"
+    "certificate_path": "$CERT_CRT",
+    "key_path": "$CERT_KEY"
   }
 }
 EOF
@@ -1065,6 +1460,84 @@ EOF
     append_order "$(basename "$FILE")"
 
     echo "Hysteria2 已添加。"
+}
+
+# ==========================================================
+# Naive（仅官方完整内核）
+# ==========================================================
+
+add_naive() {
+
+    if [ "$(kernel_flavor)" != "official" ]; then
+        echo
+        echo "当前内核为裁剪版（sing-box-lite），不含 Naive 入站。"
+        echo "请先在「切换/更新内核」中切换到官方完整版，再添加 Naive。"
+        return 1
+    fi
+
+    TAG="naive"
+    FILE="$INBOUND_DIR/${TAG}.json"
+
+    if [ -f "$FILE" ]; then
+        echo "该配置已经存在。"
+        return
+    fi
+
+    ensure_certificate || return 1
+
+    if [ "$CERT_INSECURE" = "1" ]; then
+        echo "[!] 当前为自签证书，Naive 客户端需跳过证书验证；建议使用真实证书。"
+    fi
+
+    PORT="$(random_port)"
+    PASSWORD="$(random_password)"; [ -n "$PASSWORD" ] || { echo "密码生成失败。"; return 1; }
+    USERNAME="user1"
+
+    echo
+    printf "Naive 端口 [$PORT]: "
+    read X
+
+    [ -n "$X" ] && PORT="$X"
+
+    printf "用户名 [user1]: "
+    read X
+
+    [ -n "$X" ] && USERNAME="$X"
+
+    cat > "$FILE" <<EOF
+{
+  "type": "naive",
+  "tag": "$TAG",
+  "listen": "::",
+  "listen_port": $PORT,
+  "network": "tcp",
+  "users": [
+    {
+      "username": "$USERNAME",
+      "password": "$PASSWORD"
+    }
+  ],
+  "tls": {
+    "enabled": true,
+    "server_name": "$CERT_SNI",
+    "alpn": [
+      "h2"
+    ],
+    "min_version": "1.2",
+    "certificate_path": "$CERT_CRT",
+    "key_path": "$CERT_KEY"
+  }
+}
+EOF
+
+    save_info "$TAG" \
+        "USERNAME=$USERNAME" \
+        "PASSWORD=$PASSWORD" \
+        "PORT=$PORT"
+
+    append_order "$(basename "$FILE")"
+
+    echo "Naive 已添加（用户名 $USERNAME，密码 $PASSWORD）。"
 }
 
 # ==========================================================
@@ -1556,6 +2029,11 @@ add_all_configs() {
     add_hysteria2
     add_anyreality
     add_vless_reality_free
+
+    # Naive 仅官方完整内核包含
+    if [ "$(kernel_flavor)" = "official" ]; then
+        add_naive
+    fi
 }
 
 # ==========================================================
@@ -1578,7 +2056,8 @@ run_selection() {
             5) add_hysteria2 ;;
             6) add_anyreality ;;
             7) add_vless_reality_free ;;
-            8) add_all_configs ;;
+            8) add_naive ;;
+            9) add_all_configs ;;
             *) echo "无效选项：$ITEM（已跳过）" ;;
         esac
     done
@@ -1602,7 +2081,14 @@ add_config_menu() {
     echo "5. Hysteria2"
     echo "6. AnyReality（AnyTLS + REALITY）"
     echo "7. VLESS + REALITY（免流）"
-    echo "8. 全部添加"
+
+    if [ "$(kernel_flavor)" = "official" ]; then
+        echo "8. Naive（HTTP/2 代理）"
+    else
+        echo "8. Naive（需官方完整内核，当前裁剪版不可用）"
+    fi
+
+    echo "9. 全部添加"
     echo
 
     printf "请选择（可多选，如 1,4,6）："
@@ -1796,6 +2282,16 @@ generate_links() {
 
     rm -f "$LINK_DIR"/*.txt
 
+    if [ "$CERT_INSECURE" = "1" ]; then
+        TLS_INSECURE="insecure=1&"
+        TLS_INSECURE_TAIL="&insecure=1"
+        TUIC_INSECURE="&allow_insecure=1"
+    else
+        TLS_INSECURE=""
+        TLS_INSECURE_TAIL=""
+        TUIC_INSECURE=""
+    fi
+
     for FILE in "$INBOUND_DIR"/*.json; do
 
         [ -f "$FILE" ] || continue
@@ -1811,6 +2307,7 @@ generate_links() {
             tuic) NAME="tuic" ;;
             anytls) NAME="anytls" ;;
             hysteria2) NAME="hysteria2" ;;
+            naive) NAME="naive" ;;
             anyreality) NAME="anyreality" ;;
             *) NAME="$TAG" ;;
         esac
@@ -1879,7 +2376,7 @@ generate_links() {
 
             else
 
-                echo "anytls://${PASSWORD_ENC}@${IP}:${PORT}?insecure=1&security=tls&sni=www.bing.com&type=tcp&headerType=none#${REMARK}"                     > "$LINK_DIR/$TAG.txt"
+                echo "anytls://${PASSWORD_ENC}@${IP}:${PORT}?${TLS_INSECURE}security=tls&sni=${CERT_SNI}&type=tcp&headerType=none#${REMARK}"                     > "$LINK_DIR/$TAG.txt"
 
             fi
             ;;
@@ -1890,7 +2387,19 @@ generate_links() {
 
             PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')"
 
-            echo "hysteria2://${PASSWORD_ENC}@${IP}:${PORT}/?sni=www.bing.com&insecure=1#${REMARK}" \
+            echo "hysteria2://${PASSWORD_ENC}@${IP}:${PORT}/?sni=${CERT_SNI}${TLS_INSECURE_TAIL}#${REMARK}" \
+                > "$LINK_DIR/$TAG.txt"
+            ;;
+
+        naive)
+
+            USERNAME="$(jq -r '.users[0].username' "$FILE")"
+            PASSWORD="$(jq -r '.users[0].password' "$FILE")"
+
+            USERNAME_ENC="$(printf '%s' "$USERNAME" | sed 's/%/%25/g; s/@/%40/g; s/:/%3A/g; s|/|%2F|g; s/?/%3F/g; s/#/%23/g')"
+            PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/%/%25/g; s/@/%40/g; s/:/%3A/g; s/+/%2B/g; s|/|%2F|g; s/=/%3D/g; s/?/%3F/g; s/#/%23/g')"
+
+            echo "naive+https://${USERNAME_ENC}:${PASSWORD_ENC}@${IP}:${PORT}?sni=${CERT_SNI}${TLS_INSECURE_TAIL}#${REMARK}" \
                 > "$LINK_DIR/$TAG.txt"
             ;;
 
@@ -1901,7 +2410,7 @@ generate_links() {
 
             PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')"
 
-            echo "tuic://${UUID}:${PASSWORD_ENC}@${IP}:${PORT}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=www.bing.com&allow_insecure=1#${REMARK}" \
+            echo "tuic://${UUID}:${PASSWORD_ENC}@${IP}:${PORT}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=${CERT_SNI}${TUIC_INSECURE}#${REMARK}" \
                 > "$LINK_DIR/$TAG.txt"
             ;;
 
@@ -1928,14 +2437,21 @@ show_links() {
         echo
     done
 
-    if [ -f "$CERT_DIR/www.bing.com.crt" ]; then
+    if [ "$CERT_INSECURE" = "0" ]; then
+
+        echo
+        echo "===== TLS 证书 ====="
+        echo "使用已有证书：$CERT_CRT"
+        echo "SNI：$CERT_SNI（客户端按系统根证书校验）"
+
+    elif [ -f "$CERT_CRT" ]; then
 
         echo
         echo "===== TLS 固定证书（可选，替代跳过证书验证）====="
         echo "v2rayN：节点设置 → 固定证书 → 获取证书（或粘贴下方 PEM）"
-        echo "设置后会自动禁用跳过证书验证，SNI 保持 www.bing.com 不变："
+        echo "设置后会自动禁用跳过证书验证，SNI 保持 $CERT_SNI 不变："
         echo
-        cat "$CERT_DIR/www.bing.com.crt"
+        cat "$CERT_CRT"
     fi
 }
 
@@ -2019,6 +2535,11 @@ management_panel() {
         else
             "$BIN" version 2>/dev/null | head -n 1
         fi
+
+        case "$(kernel_flavor)" in
+            lite) echo "内核类型：裁剪版（lite，不含 Naive）" ;;
+            *) echo "内核类型：官方完整版（含 Naive）" ;;
+        esac
 
         echo
 
@@ -2414,6 +2935,23 @@ EOF
 BASE="/etc/sing-box"
 BIN="/usr/local/bin/sing-box"
 
+# 证书来源（与主脚本共用 cert-source.conf）
+CERT_DIR="$BASE/cert"
+CERT_CRT="$CERT_DIR/www.bing.com.crt"
+CERT_KEY="$CERT_DIR/www.bing.com.key"
+CERT_SNI="www.bing.com"
+CERT_INSECURE="1"
+CERT_SRC_CONF="$BASE/cert-source.conf"
+
+[ -f "$CERT_SRC_CONF" ] && . "$CERT_SRC_CONF"
+
+if [ ! -s "$CERT_CRT" ] || [ ! -s "$CERT_KEY" ]; then
+    CERT_CRT="$CERT_DIR/www.bing.com.crt"
+    CERT_KEY="$CERT_DIR/www.bing.com.key"
+    CERT_SNI="www.bing.com"
+    CERT_INSECURE="1"
+fi
+
 # 限制 Go 堆内存，避免小内存机器上 sing-box 启动/运行时触发 OOM
 export GOMEMLIMIT=24MiB
 
@@ -2458,6 +2996,36 @@ rate_opt() {
     # 项目默认目标是 64MB 小内存 Alpine NAT 机，不做机器探测（NAT 机内存
     # 读数不准）。限速压住解压脏页的生成速率，避免触发 OOM
     echo "--limit-rate=2m"
+}
+
+# 内核类型：lite（裁剪版）/ official（官方完整版）
+kernel_version() {
+
+    V="$(cat "$BASE/sing-box-version" 2>/dev/null)"
+
+    if [ -z "$V" ] && [ -x "$BIN" ]; then
+        V="$("$BIN" version 2>/dev/null | head -n 1 | awk '{print $3}')"
+    fi
+
+    printf '%s' "$V"
+}
+
+kernel_flavor() {
+
+    F="$(cat "$BASE/kernel-flavor" 2>/dev/null)"
+
+    case "$F" in
+        lite|official)
+            printf '%s' "$F"
+            return
+            ;;
+    esac
+
+    # 兼容旧版本安装：从版本号判断
+    case "$(kernel_version)" in
+        *lite*) printf '%s' lite ;;
+        *) printf '%s' official ;;
+    esac
 }
 
 enable_bbr() {
@@ -2884,14 +3452,21 @@ show_links() {
         cat "$FILE"
     done
 
-    if [ -f "$BASE/cert/www.bing.com.crt" ]; then
+    if [ "$CERT_INSECURE" = "0" ]; then
+
+        echo
+        echo "===== TLS 证书 ====="
+        echo "使用已有证书：$CERT_CRT"
+        echo "SNI：$CERT_SNI（客户端按系统根证书校验）"
+
+    elif [ -f "$CERT_CRT" ]; then
 
         echo
         echo "===== TLS 固定证书（可选，替代跳过证书验证）====="
         echo "v2rayN：节点设置 → 固定证书 → 获取证书（或粘贴下方 PEM）"
-        echo "设置后会自动禁用跳过证书验证，SNI 保持 www.bing.com 不变："
+        echo "设置后会自动禁用跳过证书验证，SNI 保持 $CERT_SNI 不变："
         echo
-        cat "$BASE/cert/www.bing.com.crt"
+        cat "$CERT_CRT"
     fi
 }
 
@@ -2948,10 +3523,20 @@ update_kernel() {
 
     FLAVOR="$1"
     if [ -z "$FLAVOR" ]; then
-        case "$(cat "$BASE/sing-box-version" 2>/dev/null)" in
-            *lite*) FLAVOR=lite ;;
-            *) FLAVOR=official ;;
-        esac
+        FLAVOR="$(kernel_flavor)"
+    fi
+
+    # 裁剪版不含 Naive 入站，避免切换后配置校验失败、服务起不来
+    if [ "$FLAVOR" = "lite" ]; then
+        for F in "$BASE/inbounds"/*.json; do
+            [ -f "$F" ] || continue
+            if [ "$(jq -r '.type' "$F" 2>/dev/null)" = "naive" ]; then
+                echo
+                echo "检测到 Naive 节点（$(basename "$F")），裁剪版内核不支持 Naive。"
+                echo "请先删除该节点，或继续使用官方完整内核。"
+                return
+            fi
+        done
     fi
 
     if [ "$FLAVOR" = "lite" ]; then
@@ -3043,31 +3628,32 @@ update_kernel() {
     rm -f "$BASE/update-hint" "$BASE/.last-update-check"
 
     printf '%s\n' "$V" > "$BASE/sing-box-version"
+    printf '%s\n' "$FLAVOR" > "$BASE/kernel-flavor"
 
     echo
-    echo "sing-box 已更新到 $V"
+    echo "sing-box 已更新到 $V（$FLAVOR）"
 }
 
 switch_kernel() {
 
-    CUR="官方"
-    case "$(cat "$BASE/sing-box-version" 2>/dev/null)" in
-        *lite*) CUR="低内存裁剪版" ;;
+    case "$(kernel_flavor)" in
+        lite) CUR="低内存裁剪版（lite）" ;;
+        *) CUR="官方完整版（official）" ;;
     esac
 
     echo
     echo "当前内核：$CUR"
     echo
-    echo "1. 官方稳定版"
-    echo "2. 低内存裁剪版（sing-box-lite）"
+    echo "1. 低内存裁剪版（默认，体积小/低内存，不含 Naive）"
+    echo "2. 官方完整版（含全部协议，含 Naive，体积大/内存占用高）"
     echo "0. 返回"
     echo
     printf "请选择："
     read K
 
     case "$K" in
-        1) update_kernel official ;;
-        2) update_kernel lite ;;
+        1) update_kernel lite ;;
+        2) update_kernel official ;;
         *) echo "未修改。" ;;
     esac
 }
@@ -3130,6 +3716,11 @@ while :; do
         echo "sing-box version $VER"
     fi
 
+    case "$(kernel_flavor)" in
+        lite) echo "内核类型：裁剪版（lite，不含 Naive）" ;;
+        *) echo "内核类型：官方完整版（含 Naive）" ;;
+    esac
+
     echo
 
     list_configs
@@ -3146,7 +3737,7 @@ while :; do
     echo "9. 服务状态"
     echo "10. DNS"
     echo "11. BBR"
-    echo "12. 申请真实证书（acme.sh）"
+    echo "12. 证书管理（acme / 已有证书目录 / 恢复自签）"
     echo "13. 切换/更新内核"
     echo "14. 校验配置"
     echo "15. 查看日志"
@@ -3295,14 +3886,24 @@ DNSEOF
             ;;
 
         12)
-            echo "下载证书申请脚本..."
-            CERT_TOOL="/tmp/sb-cert.sh"
-            if curl -fsSL --max-time 20 -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/loser641/singbox-deploy/contents/cert.sh" -o "$CERT_TOOL"; then
-                sh "$CERT_TOOL"
-                rm -f "$CERT_TOOL"
-            else
-                echo "下载失败，请检查网络。"
+            if [ ! -x /usr/local/bin/install-singbox.sh ] || ! grep -q -- '--cert' /usr/local/bin/install-singbox.sh; then
+                echo "下载安装脚本..."
+                curl -fsSL --max-time 20 -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/loser641/singbox-deploy/contents/sb.sh" -o /usr/local/bin/install-singbox.sh || {
+                    echo "下载失败，请检查网络。"
+                    pause
+                    continue
+                }
+                chmod +x /usr/local/bin/install-singbox.sh
             fi
+            sh /usr/local/bin/install-singbox.sh --cert
+
+            # 重新加载证书配置（可能已切换证书目录/恢复自签）
+            CERT_CRT="$CERT_DIR/www.bing.com.crt"
+            CERT_KEY="$CERT_DIR/www.bing.com.key"
+            CERT_SNI="www.bing.com"
+            CERT_INSECURE="1"
+            [ -f "$CERT_SRC_CONF" ] && . "$CERT_SRC_CONF"
+
             pause
             ;;
 
@@ -3378,6 +3979,21 @@ BASE="/etc/sing-box"
 LINK_DIR="$BASE/links"
 INFO="$BASE/server-info"
 
+# 证书来源（与主脚本共用 cert-source.conf）
+CERT_DIR="$BASE/cert"
+CERT_CRT="$CERT_DIR/www.bing.com.crt"
+CERT_KEY="$CERT_DIR/www.bing.com.key"
+CERT_SNI="www.bing.com"
+CERT_INSECURE="1"
+CERT_SRC_CONF="$BASE/cert-source.conf"
+
+[ -f "$CERT_SRC_CONF" ] && . "$CERT_SRC_CONF"
+
+if [ ! -s "$CERT_CRT" ] || [ ! -s "$CERT_KEY" ]; then
+    CERT_SNI="www.bing.com"
+    CERT_INSECURE="1"
+fi
+
 mkdir -p "$LINK_DIR"
 
 IP="$(curl -4 -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || echo YOUR_SERVER_IP)"
@@ -3389,6 +4005,16 @@ if [ -f "$INFO" ]; then
 fi
 
 rm -f "$LINK_DIR"/*.txt
+
+if [ "$CERT_INSECURE" = "1" ]; then
+    TLS_INSECURE="insecure=1&"
+    TLS_INSECURE_TAIL="&insecure=1"
+    TUIC_INSECURE="&allow_insecure=1"
+else
+    TLS_INSECURE=""
+    TLS_INSECURE_TAIL=""
+    TUIC_INSECURE=""
+fi
 
 for FILE in "$BASE/inbounds"/*.json; do
 
@@ -3405,6 +4031,7 @@ for FILE in "$BASE/inbounds"/*.json; do
         tuic) NAME="tuic" ;;
         anytls) NAME="anytls" ;;
         hysteria2) NAME="hysteria2" ;;
+        naive) NAME="naive" ;;
         anyreality) NAME="anyreality" ;;
         *) NAME="$TAG" ;;
     esac
@@ -3471,8 +4098,9 @@ for FILE in "$BASE/inbounds"/*.json; do
 
         else
 
-            printf '%s
-'                 "anytls://${PASSWORD_ENC}@${IP}:${PORT}?insecure=1&security=tls&sni=www.bing.com&type=tcp&headerType=none#${REMARK}"                 > "$LINK_DIR/$TAG.txt"
+            printf '%s\n' \
+                "anytls://${PASSWORD_ENC}@${IP}:${PORT}?${TLS_INSECURE}security=tls&sni=${CERT_SNI}&type=tcp&headerType=none#${REMARK}" \
+                > "$LINK_DIR/$TAG.txt"
 
         fi
         ;;
@@ -3484,7 +4112,20 @@ for FILE in "$BASE/inbounds"/*.json; do
         PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')"
 
         printf '%s\n' \
-            "hysteria2://${PASSWORD_ENC}@${IP}:${PORT}/?sni=www.bing.com&insecure=1#${REMARK}" \
+            "hysteria2://${PASSWORD_ENC}@${IP}:${PORT}/?sni=${CERT_SNI}${TLS_INSECURE_TAIL}#${REMARK}" \
+            > "$LINK_DIR/$TAG.txt"
+        ;;
+
+    naive)
+
+        USERNAME="$(jq -r '.users[0].username' "$FILE")"
+        PASSWORD="$(jq -r '.users[0].password' "$FILE")"
+
+        USERNAME_ENC="$(printf '%s' "$USERNAME" | sed 's/%/%25/g; s/@/%40/g; s/:/%3A/g; s|/|%2F|g; s/?/%3F/g; s/#/%23/g')"
+        PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/%/%25/g; s/@/%40/g; s/:/%3A/g; s/+/%2B/g; s|/|%2F|g; s/=/%3D/g; s/?/%3F/g; s/#/%23/g')"
+
+        printf '%s\n' \
+            "naive+https://${USERNAME_ENC}:${PASSWORD_ENC}@${IP}:${PORT}?sni=${CERT_SNI}${TLS_INSECURE_TAIL}#${REMARK}" \
             > "$LINK_DIR/$TAG.txt"
         ;;
 
@@ -3496,7 +4137,7 @@ for FILE in "$BASE/inbounds"/*.json; do
         PASSWORD_ENC="$(printf '%s' "$PASSWORD" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')"
 
         printf '%s\n' \
-            "tuic://${UUID}:${PASSWORD_ENC}@${IP}:${PORT}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=www.bing.com&allow_insecure=1#${REMARK}" \
+            "tuic://${UUID}:${PASSWORD_ENC}@${IP}:${PORT}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=${CERT_SNI}${TUIC_INSECURE}#${REMARK}" \
             > "$LINK_DIR/$TAG.txt"
         ;;
 
@@ -3579,8 +4220,11 @@ initial_setup() {
         "$CERT_DIR" \
         "$BASE/info"
 
+    load_cert_source
+
     detect_os
     install_dependencies
+    select_kernel_flavor
     install_singbox
     enable_bbr
 
@@ -3601,6 +4245,8 @@ initial_setup() {
     printf 'COUNTRY=%s\n' "$COUNTRY" > "$INFO"
     echo "节点备注国家：$COUNTRY"
 
+    select_cert_source
+
     echo
     echo "=========================================="
     echo " 初始配置"
@@ -3614,7 +4260,14 @@ initial_setup() {
     echo "5. Hysteria2"
     echo "6. AnyReality（AnyTLS + REALITY）"
     echo "7. VLESS + REALITY（免流）"
-    echo "8. 全部添加"
+
+    if [ "$(kernel_flavor)" = "official" ]; then
+        echo "8. Naive（HTTP/2 代理）"
+    else
+        echo "8. Naive（需官方完整内核，当前裁剪版不可用）"
+    fi
+
+    echo "9. 全部添加"
     echo
 
     printf "选择（可多选，如 1,4,6，直接回车跳过）："
@@ -3624,11 +4277,20 @@ initial_setup() {
 
         run_selection "$INIT"
 
-        rebuild_config || exit 1
+        if ls "$INBOUND_DIR"/*.json >/dev/null 2>&1; then
 
-        start_service
+            rebuild_config || exit 1
 
-        "$BASE/generate-links.sh"
+            start_service
+
+            "$BASE/generate-links.sh"
+
+        else
+
+            echo
+            echo "没有添加任何配置（例如裁剪版内核选 Naive 会被跳过）。"
+
+        fi
 
     else
 
@@ -3655,11 +4317,16 @@ initial_setup() {
         echo
     done
 
-    if [ -f "$CERT_DIR/www.bing.com.crt" ]; then
+    if [ "$CERT_INSECURE" = "0" ]; then
+        echo "===== TLS 证书 ====="
+        echo "使用已有证书：$CERT_CRT"
+        echo "SNI：$CERT_SNI（客户端按系统根证书校验，无需跳过验证）"
+        echo
+    elif [ -f "$CERT_CRT" ]; then
         echo "===== TLS 固定证书（可选，替代跳过证书验证）====="
         echo "v2rayN：节点设置 → 固定证书 → 粘贴下方 PEM（自动禁用跳过验证）"
         echo
-        cat "$CERT_DIR/www.bing.com.crt"
+        cat "$CERT_CRT"
         echo
     fi
 
@@ -3673,16 +4340,16 @@ initial_setup() {
     echo "    $BASE"
     echo
 
-    if [ -f "$CERT_DIR/www.bing.com.crt" ] && [ -f "$CERT_DIR/www.bing.com.key" ]; then
+    if [ -f "$CERT_CRT" ] && [ -f "$CERT_KEY" ]; then
 
         echo "证书："
         echo
-        echo "    $CERT_DIR/www.bing.com.crt"
+        echo "    $CERT_CRT"
         echo
 
         echo "私钥："
         echo
-        echo "    $CERT_DIR/www.bing.com.key"
+        echo "    $CERT_KEY"
         echo
     fi
 }
@@ -3699,6 +4366,21 @@ main() {
         printf '%s\n' "$SCRIPT_VERSION" > "$BASE/script-version"
         rm -f "$BASE/update-hint" "$BASE/.last-update-check"
         echo "组件已更新。"
+        exit 0
+    fi
+
+    if [ "${1:-}" = "--cert" ]; then
+        detect_os
+        load_cert_source
+        cert_menu
+        show_links
+        exit $?
+    fi
+
+    if [ "${1:-}" = "--set-cert-dir" ]; then
+        detect_os
+        load_cert_source
+        set_cert_dir "${2:-}" || exit 1
         exit 0
     fi
 

@@ -251,6 +251,24 @@ echo "=========================================="
 show_cert_status
 echo
 
+# 主脚本可指定外部证书目录；此时 acme 装到 /etc/sing-box/cert 不会生效
+CERT_SRC_CONF="$BASE/cert-source.conf"
+if [ -f "$CERT_SRC_CONF" ]; then
+    . "$CERT_SRC_CONF"
+    echo "[!] 当前使用已有证书目录：$CERT_CRT"
+    echo "    本工具安装的证书不会生效。"
+    echo "    如需 acme 证书，请先在面板 12 选 3 恢复脚本自签证书。"
+    echo
+    if [ "$ACTION" = "issue" ] && [ -z "$YES" ]; then
+        printf "仍要继续？[y/N]："
+        read ANS
+        case "$ANS" in
+            y|Y|yes|YES) ;;
+            *) echo "已取消。"; exit 0 ;;
+        esac
+    fi
+fi
+
 if [ "$ACTION" = "restore" ]; then
     restore_selfsigned
     exit $?

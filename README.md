@@ -4,7 +4,7 @@ sing-box 多协议一键部署脚本，**专为低配 Alpine NAT 小鸡设计**�
 
 ## 功能
 
-- 自动判断系统架构（amd64 / arm64 / armv7），下载并安装**最新稳定版** sing-box
+- 自动判断系统架构（amd64 / arm64 / armv7），下载并安装**最新稳定版** sing-box（默认 [sing-box-lite](https://github.com/loser641/sing-box-lite) 裁剪版，安装时可切官方完整版）
 - 交互式部署以下协议：
 
   1. VLESS + REALITY（默认端口 40443，SNI itunes.apple.com）
@@ -14,11 +14,13 @@ sing-box 多协议一键部署脚本，**专为低配 Alpine NAT 小鸡设计**�
   5. Hysteria2
   6. AnyReality（AnyTLS + REALITY，默认端口 30443，SNI itunes.apple.com，密码自动生成 UUID）
   7. VLESS + REALITY 免流（默认端口 50443，SNI dx-baiducdnct.inter.iqiyi.com）
-  8. 全部添加
+  8. Naive（HTTP/2 代理，**仅官方完整内核**，sing-box 1.13+）
+  9. 全部添加（裁剪版内核自动跳过 Naive）
 
 - 凭据（UUID / 密码 / ShortID）由**内核随机源**生成，REALITY 密钥对自动重试生成——不拉起多余进程，杜绝小内存 OOM 产生空凭据
 - **TLS 证书由 Cloudflare Worker（ssl.641666.xyz）在边缘生成**：每次全新密钥对、100 年有效期、CN=www.bing.com，VPS 只需 curl 拉取，**无需安装 openssl**（仅当证书服务不可用时回退本地 openssl 生成）
 - **证书复用优先**：`/etc/sing-box/cert` 下已有证书（含 acme 真实证书）就直接用，不重新生成、不覆盖——添加协议、重装脚本都不会换证书，固定证书 PEM 长期有效
+- **已有证书目录（可选）**：可直接指定 Nginx / 宝塔 / 1Panel / certbot 的证书目录，脚本递归扫描 `fullchain.pem` + `privkey.pem`，自动提取域名作为 SNI，并刷新所有已部署节点（面板 `12` 或安装时选择）
 - **真实证书申请（可选）**：独立脚本 [`cert.sh`](cert.sh)（acme.sh，选择时才下载），DNS / HTTP 验证、自动续期，面板 `12` 一键调用
 - 支持**多选部署**：一次输入 `1,4,6` 可同时添加多个协议
 - 节点备注格式：`出口国家简称-协议名`，如 `DE-reality`、`US-reality免流`、`SG-anyreality`，国家简称**自动识别出口 IP 归属地**
@@ -61,20 +63,37 @@ sh -c "$(curl -fsSL https://github.com/loser641/singbox-deploy/raw/main/sb.sh)"
 4. 删除配置      10. DNS（可修改） 16. 更新（手动检查更新，脚本走 GitHub API）
 5. 分享链接（含 TLS 固定证书 PEM） 17. 卸载
 6. 启动          11. BBR（可一键启用）18. 退出
-               12. 申请真实证书（acme.sh，独立脚本 cert.sh）
+               12. 证书管理（acme / 已有证书目录 / 恢复自签）
 ```
 
 面板启动不联网、不拉起多余进程（更新检查只在进入"16. 更新"时才运行）——小内存机器上任何一次进程尖峰都可能触发 OOM，能省则省。
 
-## 低内存裁剪内核（可选）
+## 内核选择（默认裁剪版）
 
-针对 64MB 内存小鸡，可选配 [sing-box-lite](https://github.com/loser641/sing-box-lite) 内核（自动跟随官方版本裁剪编译：去掉 vmess/trojan 等用不到的协议与 tailscale/gvisor 等重依赖，体积 -60%、启动内存峰值 -21%）：
+默认安装 [sing-box-lite](https://github.com/loser641/sing-box-lite) 裁剪版内核（自动跟随官方版本裁剪编译：去掉 vmess/trojan 等用不到的协议与 tailscale/gvisor 等重依赖，体积 -60%、启动内存峰值 -21%），**不含 Naive**。
+
+安装时会询问内核类型（直接回车 = 裁剪版）；也可用环境变量跳过询问：
 
 ```bash
-SB_KERNEL=lite sh -c "$(wget -qO- https://github.com/loser641/singbox-deploy/raw/main/sb.sh)"
+# 默认：低内存裁剪版
+sh -c "$(wget -qO- https://github.com/loser641/singbox-deploy/raw/main/sb.sh)"
+
+# 官方完整版（需要 Naive 时用）
+SB_KERNEL=official sh -c "$(wget -qO- https://github.com/loser641/singbox-deploy/raw/main/sb.sh)"
 ```
 
-安装后也可在面板「13. 切换/更新内核」随时切换官方 ⇄ 裁剪版，「16. 更新」会按当前内核源更新对应内核。不设置 `SB_KERNEL` 时默认官方内核，行为与从前完全一致。配置格式与官方相同；配置里用到被裁协议时会明确报 `unknown inbound type: xxx`。
+安装后可在面板「13. 切换/更新内核」随时切换，「16. 更新」会按当前内核源更新对应内核。存在 Naive 节点时禁止切到裁剪版（会先提示删除该节点），避免配置校验失败。配置格式与官方相同；配置里用到被裁协议时会明确报 `unknown inbound type: xxx`。
+
+## Naive 节点（仅官方完整内核）
+
+Naive（HTTP/2 CONNECT 代理）依赖 sing-box 官方完整内核，裁剪版已移除该入站：
+
+1. 面板「13」切到**官方完整版**；
+2. 「1. 添加配置」→ `8. Naive`（或安装时初始配置选 8）；
+3. 脚本自动生成用户名 `user1` / 随机密码，端口默认随机，可自定义；
+4. 分享链接格式：`naive+https://用户名:密码@IP:端口?sni=域名`。
+
+> Naive 走标准 TLS，**强烈建议配真实证书**（面板 12 → acme 或已有证书目录）。自签证书只能靠客户端跳过验证，兼容性较差。Naive 只转发 TCP（`network: tcp`），不支持 UDP。
 
 ## TLS 证书固定（可选，替代跳过证书验证）
 
@@ -107,13 +126,27 @@ sh -c "$(wget -qO- https://github.com/loser641/singbox-deploy/raw/main/cert.sh)"
 - **恢复自签名**（工具内选项 2 / `--restore`）：还原备份证书（固定证书 PEM 继续有效）并清除 acme 申请记录——**防止自动续期日后把真证书换回来**；没有备份时生成新自签证书
 - **卸载 acme.sh**（工具内选项 3 / `--uninstall-acme`）：清除申请记录和自动续期 cron；若当前是真证书会先警告（到期后无人续期）
 
+## 已有证书目录（Nginx / 宝塔 / certbot）
+
+机器上已经有一套证书时（Nginx 反代、1Panel / 宝塔、certbot 签发），不用重新申请，直接让脚本用现成的：
+
+- 面板 `12. 证书管理` → `2`，输入目录（如 `/etc/nginx/cert`）；
+- 脚本**递归扫描 6 层**，匹配同目录下的 `fullchain.pem` + `privkey.pem`；
+- 用 openssl 从证书 SAN / CN 提取域名作为 SNI，写入 `/etc/sing-box/cert-source.conf`；
+- 自动刷新所有已部署节点的 `certificate_path` / `key_path` / `server_name`（REALITY 节点不动），并重启服务；
+- 分享链接自动改为 `sni=真实域名`，不再带 `insecure=1`；若检测到是自签证书（issuer == subject）仍保留跳过验证。
+
+证书续期后（certbot / acme 替换原文件），在面板 `8. 重启` 一下即可生效。想切回脚本自签：面板 `12` → `3`。
+
 ## 配置目录
 
 ```
 /etc/sing-box/
 ├── config.json              # 合并后的主配置（先校验通过才替换，坏配置不上盘）
 ├── inbounds/                # 每个协议一个配置
-├── cert/                    # www.bing.com 证书（Worker 生成，无需 openssl）
+├── cert/                    # 脚本自签 / acme 证书（Worker 生成，无需 openssl）
+├── cert-source.conf         # 指定已有证书目录时记录证书路径与 SNI
+├── kernel-flavor            # 当前内核类型（lite / official）
 ├── links/                   # 客户端分享信息
 ├── info/                    # 每个协议的元数据（公钥等）
 ├── dns.json                 # DNS 配置（面板 10 修改，sing-box 1.14 新格式）
@@ -141,6 +174,6 @@ sh -c "$(wget -qO- https://github.com/loser641/singbox-deploy/raw/main/cert.sh)"
 | UDP 映射可用 | TUIC / Hysteria2（QUIC，低延迟） |
 | 想要证书校验又保持伪装 | TLS 固定证书（见上文） |
 
-- 需要 sing-box 1.12+（脚本自动安装最新稳定版；DNS 使用 1.14 新格式）
+- 需要 sing-box 1.13+（Naive 入站；脚本自动安装最新稳定版，DNS 使用 1.14 新格式）
 - 端口避免冲突：VLESS 默认 40443、免流 50443、AnyReality 30443，其余随机 20000+
 - REALITY 客户端需要填写对应的 `public_key`（脚本会自动保存并在分享信息中输出）
