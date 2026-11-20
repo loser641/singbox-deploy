@@ -35,7 +35,7 @@
 
 set -u
 
-SCRIPT_VERSION="2026.11.21.2"
+SCRIPT_VERSION="2026.11.21.3"
 
 BIN="/usr/local/bin/sing-box"
 BASE="/etc/sing-box"
@@ -255,8 +255,52 @@ export GOMEMLIMIT=24MiB
 # Common
 # ==========================================================
 
+# 随机端口：同一秒内多次调用必须不同。
+# 旧的 awk 'BEGIN{srand()}' 以秒为种子，同一秒内多次调用返回同一个端口，
+# 「全部添加」时 Shadowsocks / TUIC / Hysteria2 会撞在同一端口，服务起不来。
+# 这里改用 /dev/urandom，并把已分配端口记到文件（command substitution 是子 shell，
+# 变量传不出来），再额外避开系统里已在监听的端口。
 random_port() {
-    awk 'BEGIN{srand(); print int(20000+rand()*40000)}'
+
+    _STATE="${BASE:-/tmp}/.allocated-ports"
+    _TRY=0
+
+    while [ "$_TRY" -lt 40 ]; do
+
+        _TRY=$((_TRY + 1))
+
+        _P=""
+
+        if [ -r /dev/urandom ]; then
+            _D1="$(tr -dc '2345' < /dev/urandom 2>/dev/null | head -c 1)"
+            _REST="$(tr -dc '0-9' < /dev/urandom 2>/dev/null | head -c 4)"
+            case "$_D1$_REST" in
+                [2-5][0-9][0-9][0-9][0-9]) _P="$_D1$_REST" ;;
+            esac
+        fi
+
+        # urandom 不可用时退化为确定性但可区分的值
+        [ -n "$_P" ] || _P=$((20000 + ($$ * _TRY * 7919) % 40000))
+
+        # 本次运行已分配过
+        if [ -f "$_STATE" ] && grep -qx "$_P" "$_STATE" 2>/dev/null; then
+            continue
+        fi
+
+        # 系统里已有监听
+        if command_exists ss; then
+            ss -tln 2>/dev/null | grep -qE "[:.]${_P}[[:space:]]" && continue
+            ss -uln 2>/dev/null | grep -qE "[:.]${_P}[[:space:]]" && continue
+        fi
+
+        mkdir -p "$(dirname "$_STATE")" 2>/dev/null || true
+        printf '%s\n' "$_P" >> "$_STATE" 2>/dev/null || true
+
+        printf '%s\n' "$_P"
+        return 0
+    done
+
+    printf '%s\n' "$_P"
 }
 
 random_password() {
@@ -3285,8 +3329,52 @@ fi
 # 限制 Go 堆内存，避免小内存机器上 sing-box 启动/运行时触发 OOM
 export GOMEMLIMIT=24MiB
 
+# 随机端口：同一秒内多次调用必须不同。
+# 旧的 awk 'BEGIN{srand()}' 以秒为种子，同一秒内多次调用返回同一个端口，
+# 「全部添加」时 Shadowsocks / TUIC / Hysteria2 会撞在同一端口，服务起不来。
+# 这里改用 /dev/urandom，并把已分配端口记到文件（command substitution 是子 shell，
+# 变量传不出来），再额外避开系统里已在监听的端口。
 random_port() {
-    awk 'BEGIN{srand(); print int(20000+rand()*40000)}'
+
+    _STATE="${BASE:-/tmp}/.allocated-ports"
+    _TRY=0
+
+    while [ "$_TRY" -lt 40 ]; do
+
+        _TRY=$((_TRY + 1))
+
+        _P=""
+
+        if [ -r /dev/urandom ]; then
+            _D1="$(tr -dc '2345' < /dev/urandom 2>/dev/null | head -c 1)"
+            _REST="$(tr -dc '0-9' < /dev/urandom 2>/dev/null | head -c 4)"
+            case "$_D1$_REST" in
+                [2-5][0-9][0-9][0-9][0-9]) _P="$_D1$_REST" ;;
+            esac
+        fi
+
+        # urandom 不可用时退化为确定性但可区分的值
+        [ -n "$_P" ] || _P=$((20000 + ($$ * _TRY * 7919) % 40000))
+
+        # 本次运行已分配过
+        if [ -f "$_STATE" ] && grep -qx "$_P" "$_STATE" 2>/dev/null; then
+            continue
+        fi
+
+        # 系统里已有监听
+        if command_exists ss; then
+            ss -tln 2>/dev/null | grep -qE "[:.]${_P}[[:space:]]" && continue
+            ss -uln 2>/dev/null | grep -qE "[:.]${_P}[[:space:]]" && continue
+        fi
+
+        mkdir -p "$(dirname "$_STATE")" 2>/dev/null || true
+        printf '%s\n' "$_P" >> "$_STATE" 2>/dev/null || true
+
+        printf '%s\n' "$_P"
+        return 0
+    done
+
+    printf '%s\n' "$_P"
 }
 
 pause() {
