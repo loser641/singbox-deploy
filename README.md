@@ -10,7 +10,7 @@ sing-box 多协议一键部署脚本，**专为低配 Alpine NAT 小鸡设计**�
   1. VLESS + REALITY（默认端口 40443，SNI itunes.apple.com）
   2. Shadowsocks（AEAD-2022，自动生成密钥）
   3. TUIC
-  4. AnyTLS（www.bing.com 100 年自签名证书）
+  4. AnyTLS（100 年自签名证书，域名可自定义）
   5. Hysteria2
   6. AnyReality（AnyTLS + REALITY，默认端口 30443，SNI itunes.apple.com，密码自动生成 UUID）
   7. VLESS + REALITY 免流（默认端口 50443，SNI dx-baiducdnct.inter.iqiyi.com）
@@ -18,7 +18,10 @@ sing-box 多协议一键部署脚本，**专为低配 Alpine NAT 小鸡设计**�
   9. 全部添加（裁剪版内核自动跳过 Naive）
 
 - 凭据（UUID / 密码 / ShortID）由**内核随机源**生成，REALITY 密钥对自动重试生成——不拉起多余进程，杜绝小内存 OOM 产生空凭据
-- **TLS 证书由 Cloudflare Worker（ssl.641666.xyz）在边缘生成**：每次全新密钥对、100 年有效期、CN=www.bing.com，VPS 只需 curl 拉取，**无需安装 openssl**（仅当证书服务不可用时回退本地 openssl 生成）
+- **TLS 证书由 Cloudflare Worker（ssl.641666.xyz）在边缘生成**：每次全新密钥对、100 年有效期，**域名由用户指定**（普通域名 / IPv4 / IPv6 均可，CN 与 SAN 都写成该域名），VPS 只需 curl 拉取，**无需安装 openssl**（仅当证书服务不可用时回退本地 openssl 生成）
+  - 域名经 **base64url 编码**后放在 `?d=` 参数里发送，避免特殊字符和明文日志
+  - 服务端会**先校验域名格式再签发**：只接受合法 DNS 主机名（至少两段、每段 1-63 字符、不以连字符开头结尾、顶级域为字母或 `xn--` punycode）与标准 IPv4 / IPv6 写法；带协议前缀、路径、端口、下划线、空白的输入一律 `400` 拒绝并返回具体原因
+  - 选定的域名记在 `/etc/sing-box/cert-name`，重跑脚本沿用，改域名只需在面板 `12` 重新输入
 - **证书复用优先**：`/etc/sing-box/cert` 下已有证书（含 acme 真实证书）就直接用，不重新生成、不覆盖——添加协议、重装脚本都不会换证书，固定证书 PEM 长期有效
 - **已有证书目录（可选）**：可直接指定 Nginx / 宝塔 / 1Panel / certbot 的证书目录，脚本递归扫描 `fullchain.pem` + `privkey.pem`，自动提取域名作为 SNI，并刷新所有已部署节点（面板 `12` 或安装时选择）
 - **真实证书申请（可选）**：独立脚本 [`cert.sh`](cert.sh)（acme.sh，选择时才下载），DNS / HTTP 验证、自动续期，面板 `12` 一键调用
@@ -116,7 +119,21 @@ TUIC / AnyTLS / Hysteria2 客户端默认开启 `allow_insecure`。更安全的�
 
 1. 部署完成输出（或面板菜单 5）会直接给出 `-----BEGIN CERTIFICATE-----` 的 PEM；
 2. v2rayN：节点设置 → 固定证书 → 粘贴 PEM（或"获取证书"）→ 自动禁用跳过证书验证；
-3. SNI 保持 `www.bing.com` 不变（伪装不受影响），同机器所有节点共用同一张证书。
+3. SNI 保持脚本设定的证书域名不变（伪装不受影响），同机器所有节点共用同一张证书。
+
+## 自定义证书域名（自签名）
+
+安装时选「脚本自签证书」会提示输入证书域名，面板 `12` 也可随时改：
+
+```
+证书域名/IP [www.bing.com]:
+```
+
+- 支持普通域名（`example.com`、`www.bing.com`）、IPv4（`85.189.44.47`）、IPv6（`2001:db8::1`）
+- 直接回车沿用当前域名；域名会被写入 `/etc/sing-box/cert-name`，下次运行自动沿用
+- 证书文件名跟着域名走：`/etc/sing-box/cert/<域名>.crt` / `.key`（IPv6 的冒号写成下划线，如 `2001_db8__1.crt`）
+- 改域名后旧证书不会自动删除；需要重新固定 PEM，并在客户端把 SNI 改成新域名
+- 已有同域名证书时**不会重新生成**（固定 PEM 长期有效）；想换新证书先删掉对应 `.crt` / `.key`
 
 注意：自签名证书**只生成一次**，之后一直复用（添加协议 / 重装脚本都不换）；只有删除 `/etc/sing-box/cert` 或换机器才会生成新证书，届时需重新固定。
 
@@ -135,7 +152,7 @@ sh -c "$(wget -qO- https://github.com/loser641/singbox-deploy/raw/main/cert.sh)"
   - **HTTP standalone**：需要 80 端口公网可达（会装 socat）
   - **webroot**：已有网站目录时用
 - 支持 `--staging`：先用 Let's Encrypt 测试证书跑通流程，再申请正式证书
-- 证书装入 `/etc/sing-box/cert/`（主脚本自动复用，不会被自签名覆盖）；acme.sh 定时自动续期，续期后自动重启 sing-box
+- 证书装入 `/etc/sing-box/cert/<申请域名>.crt/.key`（主脚本自动复用，不会被自签名覆盖）；申请时会把该域名写进 `cert-name`，保证 SNI 与证书一致；acme.sh 定时自动续期，续期后自动重启 sing-box
 - 客户端：SNI / 服务器名填申请的域名，按系统根证书校验（关闭 allow_insecure），**无需固定证书**；REALITY 类节点不使用此证书
 - **自动备份**：覆盖安装前把现有证书备份到 `/root/sb-cert-backup`（只备一次，保住最初的证书）
 - **恢复自签名**（工具内选项 2 / `--restore`）：还原备份证书（固定证书 PEM 继续有效）并清除 acme 申请记录——**防止自动续期日后把真证书换回来**；没有备份时生成新自签证书

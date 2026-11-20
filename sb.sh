@@ -22,7 +22,7 @@
 #   - Auto detect architecture
 #   - 默认低内存裁剪版内核（可切换官方完整版）
 #   - UUID / Reality KeyPair / ShortID
-#   - 100-year self-signed www.bing.com certificate
+#   - 100-year self-signed certificate (domain / IP configurable)
 #   - 支持指定已有证书目录（自动扫描 fullchain.pem / privkey.pem）
 #   - BBR auto enable
 #   - Custom DNS
@@ -35,7 +35,7 @@
 
 set -u
 
-SCRIPT_VERSION="2026.11.18.2"
+SCRIPT_VERSION="2026.11.21.1"
 
 BIN="/usr/local/bin/sing-box"
 BASE="/etc/sing-box"
@@ -45,33 +45,199 @@ CONFIG="$BASE/config.json"
 INFO="$BASE/server-info"
 COUNTRY="US"
 
-# TLS 证书：默认脚本自签；cert-source.conf 可指向已有证书目录
+# TLS 证书：默认脚本自签（域名可自定义）；cert-source.conf 可指向已有证书目录
 CERT_DIR="$BASE/cert"
-CERT_CRT="$CERT_DIR/www.bing.com.crt"
-CERT_KEY="$CERT_DIR/www.bing.com.key"
-CERT_SNI="www.bing.com"
+CERT_DEFAULT_SNI="www.bing.com"
+CERT_SNI="$CERT_DEFAULT_SNI"
+CERT_CRT=""
+CERT_KEY=""
 CERT_INSECURE="1"
 CERT_SRC_CONF="$BASE/cert-source.conf"
+CERT_NAME_FILE="$BASE/cert-name"
+CERT_SERVICE="https://ssl.641666.xyz/generate"
 
 mkdir -p "$BASE"
 
+# 证书文件名安全化：IPv6 的冒号不适合直接做文件名
+cert_file_base() {
+    printf '%s' "$1" | tr ':' '_'
+}
+
+# 依据 CERT_SNI 计算证书路径
+cert_apply_name() {
+    _BASE_NAME="$(cert_file_base "$CERT_SNI")"
+    CERT_CRT="$CERT_DIR/$_BASE_NAME.crt"
+    CERT_KEY="$CERT_DIR/$_BASE_NAME.key"
+}
+
+# 本地校验域名 / IPv4 / IPv6（服务端会再校验一次，这里只避免白跑一趟）
+cert_valid_name() {
+
+    _N="$1"
+    [ -n "$_N" ] || return 1
+    [ "${#_N}" -le 253 ] || return 1
+
+    # 协议前缀、路径、查询串、用户信息、空白一律拒绝
+    case "$_N" in
+        *://*) return 1 ;;
+        */*|*\?*|*#*|*@*) return 1 ;;
+        *" "*) return 1 ;;
+        *"	"*) return 1 ;;
+    esac
+
+    # 只允许 [0-9A-Za-z.:-]，其余字符（含中文、下划线）直接拒
+    case "$_N" in
+        *[!0-9A-Za-z.:-]*) return 1 ;;
+    esac
+
+    # IPv6：含冒号
+    case "$_N" in
+        *:*)
+            # 只允许十六进制、冒号、点
+            case "$_N" in
+                *[!0-9A-Fa-f:.]*) return 1 ;;
+                *:::*|*:.:*|*::.*|*\.::*) return 1 ;;
+            esac
+            # 最多一个 "::"
+            _REST="$_N"
+            _DBL=0
+            while :; do
+                case "$_REST" in
+                    *::*)
+                        _DBL=$((_DBL + 1))
+                        _REST="${_REST#*::}"
+                        ;;
+                    *) break ;;
+                esac
+            done
+            [ "$_DBL" -le 1 ] || return 1
+            return 0
+            ;;
+    esac
+
+    # IPv4：只有数字和点
+    case "$_N" in
+        *[!0-9.]*)
+            : # 不是 IPv4，继续按域名校验
+            ;;
+        *)
+            # 四段、0-255、无前导零
+            _O1="${_N%%.*}"
+            _R="${_N#*.}"
+            [ "$_R" != "$_N" ] || return 1
+            _O2="${_R%%.*}"
+            _R="${_R#*.}"
+            [ "$_R" != "${_R#*.}" ] || return 1
+            _O3="${_R%%.*}"
+            _O4="${_R#*.}"
+
+            case "$_O4" in
+                *.*) return 1 ;;
+            esac
+
+            for _O in "$_O1" "$_O2" "$_O3" "$_O4"; do
+                [ -n "$_O" ] || return 1
+                case "$_O" in
+                    0) ;;
+                    0*) return 1 ;;                       # 前导零
+                    *[!0-9]*) return 1 ;;
+                esac
+                [ "${#_O}" -le 3 ] || return 1
+                [ "$_O" -le 255 ] 2>/dev/null || return 1
+            done
+            return 0
+            ;;
+    esac
+
+    # 域名：点分段，每段 1-63，字母数字开头结尾，中间可带连字符
+    case "$_N" in
+        .*|*.|*..*) return 1 ;;
+    esac
+
+    _CNT=0
+    _REST="$_N"
+    while :; do
+        case "$_REST" in
+            *.*)
+                _L="${_REST%%.*}"
+                _REST="${_REST#*.}"
+                ;;
+            *)
+                _L="$_REST"
+                _REST=""
+                ;;
+        esac
+
+        _CNT=$((_CNT + 1))
+        [ -n "$_L" ] || return 1
+        [ "${#_L}" -le 63 ] || return 1
+        case "$_L" in
+            -*|*-) return 1 ;;
+            *[!0-9A-Za-z-]*) return 1 ;;
+        esac
+
+        [ -n "$_REST" ] || break
+    done
+    [ "$_CNT" -ge 2 ] || return 1
+
+    # 顶级域：纯字母，或 xn-- 开头的 punycode
+    _TLD="${_N##*.}"
+    case "$_TLD" in
+        [Xx][Nn]--*)
+            _TAIL="${_TLD#??--}"
+            [ -n "$_TAIL" ] || return 1
+            [ "${#_TAIL}" -le 59 ] || return 1
+            case "$_TAIL" in
+                *[!0-9A-Za-z-]*) return 1 ;;
+            esac
+            ;;
+        *[!A-Za-z]*) return 1 ;;
+        *)
+            [ "${#_TLD}" -ge 2 ] && [ "${#_TLD}" -le 63 ] || return 1
+            ;;
+    esac
+
+    return 0
+}
+
+# base64url（无 padding）：URL 里传域名/IP 用
+cert_b64url() {
+    printf '%s' "$1" | base64 | tr -d '\r\n=' | tr '+/' '-_'
+}
+
+# 记住用户选的证书域名，下次运行沿用
+cert_save_name() {
+    printf '%s\n' "$CERT_SNI" > "$CERT_NAME_FILE"
+    chmod 600 "$CERT_NAME_FILE" 2>/dev/null || true
+}
+
 load_cert_source() {
 
-    CERT_CRT="$CERT_DIR/www.bing.com.crt"
-    CERT_KEY="$CERT_DIR/www.bing.com.key"
-    CERT_SNI="www.bing.com"
-    CERT_INSECURE="1"
+    # 1) 默认：脚本自签，域名取 cert-name（缺省 www.bing.com）
+    CERT_SNI="$CERT_DEFAULT_SNI"
 
+    if [ -s "$CERT_NAME_FILE" ]; then
+        _N="$(sed -n '1p' "$CERT_NAME_FILE" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        [ -n "$_N" ] && CERT_SNI="$_N"
+    fi
+
+    CERT_INSECURE="1"
+    CERT_EXTERNAL="0"
+    cert_apply_name
+
+    # 2) 外部证书目录优先
     [ -f "$CERT_SRC_CONF" ] || return 0
 
     . "$CERT_SRC_CONF"
 
     # 外部证书被移走时回退自签，避免配置指向不存在的文件
     if [ ! -s "$CERT_CRT" ] || [ ! -s "$CERT_KEY" ]; then
-        CERT_CRT="$CERT_DIR/www.bing.com.crt"
-        CERT_KEY="$CERT_DIR/www.bing.com.key"
-        CERT_SNI="www.bing.com"
+        CERT_SNI="$CERT_DEFAULT_SNI"
         CERT_INSECURE="1"
+        CERT_EXTERNAL="0"
+        cert_apply_name
+    else
+        CERT_EXTERNAL="1"
     fi
 }
 
@@ -449,18 +615,52 @@ install_singbox() {
 }
 
 # ==========================================================
-# Generate 100-year www.bing.com certificate
+# Generate 100-year self-signed certificate (domain configurable)
 # ==========================================================
+
+# 询问证书域名 / IP，回车沿用当前值
+ask_cert_domain() {
+
+    echo
+    echo "=========================================="
+    echo " 证书域名"
+    echo "=========================================="
+    echo
+    echo "支持：普通域名（example.com）、IPv4、IPv6"
+    echo "证书由 ssl.641666.xyz 生成：100 年、自签、CN 与 SAN 均为该域名/IP。"
+    echo
+    printf "证书域名/IP [%s]: " "$CERT_SNI"
+    read CERT_INPUT
+
+    CERT_INPUT="$(printf '%s' "$CERT_INPUT" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+
+    [ -n "$CERT_INPUT" ] || return 0
+
+    if ! cert_valid_name "$CERT_INPUT"; then
+        echo
+        echo "[!] 域名格式不合法：$CERT_INPUT"
+        echo "    域名需含至少两段（如 example.com），IP 需为标准写法。"
+        return 1
+    fi
+
+    CERT_SNI="$CERT_INPUT"
+    cert_apply_name
+    cert_save_name
+
+    echo "[+] 已设为：$CERT_SNI"
+    return 0
+}
 
 generate_certificate() {
 
     mkdir -p "$CERT_DIR"
 
-    CRT="$CERT_DIR/www.bing.com.crt"
-    KEY="$CERT_DIR/www.bing.com.key"
+    cert_apply_name
+    CRT="$CERT_CRT"
+    KEY="$CERT_KEY"
 
     if [ -s "$CRT" ] && [ -s "$KEY" ]; then
-        echo "[+] 已存在 www.bing.com 证书（含 acme 真证书），直接复用。"
+        echo "[+] 已存在 $CERT_SNI 证书（含 acme 真证书），直接复用。"
         return
     fi
 
@@ -471,15 +671,25 @@ generate_certificate() {
     echo "=========================================="
     echo " 生成 100 年自签名 TLS 证书"
     echo "=========================================="
+    echo
+    echo "域名：$CERT_SNI"
 
     # 优先使用证书服务（Cloudflare Worker 生成，无需安装 openssl）
-    CERT_SERVICE="https://ssl.641666.xyz/generate"
+    # 域名经 base64url 编码后放在 d 参数，服务端会校验格式
+    CERT_ENC="$(cert_b64url "$CERT_SNI")"
 
-    CERT_JSON="$(curl -fsSL --max-time 30 "$CERT_SERVICE" 2>/dev/null || true)"
+    CERT_JSON="$(curl -fsSL --max-time 30 "$CERT_SERVICE?d=$CERT_ENC" 2>/dev/null || true)"
 
     if [ -n "$CERT_JSON" ]; then
         printf '%s' "$CERT_JSON" | jq -r '.certificate_pem // empty' > "$CRT" 2>/dev/null
         printf '%s' "$CERT_JSON" | jq -r '.private_key_pem // empty' > "$KEY" 2>/dev/null
+
+        # 服务端拒绝时返回 {"error": "..."}，把原因带给用户
+        if [ ! -s "$CRT" ] || [ ! -s "$KEY" ]; then
+            CERT_ERR="$(printf '%s' "$CERT_JSON" | jq -r '.error // empty' 2>/dev/null)"
+            [ -n "$CERT_ERR" ] && echo "[!] 证书服务拒绝：$CERT_ERR"
+            rm -f "$CRT" "$KEY"
+        fi
     fi
 
     if [ ! -s "$KEY" ] || [ ! -s "$CRT" ]; then
@@ -499,6 +709,18 @@ generate_certificate() {
             return 1
         }
 
+        # SAN 类型随目标变化：IP 用 IP.1，域名用 DNS.1
+        case "$CERT_SNI" in
+            *:*) SAN_LINE="IP.1 = $CERT_SNI" ;;
+            *)
+                if printf '%s' "$CERT_SNI" | grep -qE '^[0-9.]+$'; then
+                    SAN_LINE="IP.1 = $CERT_SNI"
+                else
+                    SAN_LINE="DNS.1 = $CERT_SNI"
+                fi
+                ;;
+        esac
+
         cat > "$CERT_DIR/openssl.cnf" <<EOF
 [req]
 distinguished_name = req_distinguished_name
@@ -511,7 +733,7 @@ ST = Washington
 L = Redmond
 O = Microsoft
 OU = Web
-CN = www.bing.com
+CN = $CERT_SNI
 
 [v3_req]
 subjectAltName = @alt_names
@@ -520,7 +742,7 @@ keyUsage = critical,digitalSignature,keyEncipherment
 extendedKeyUsage = serverAuth
 
 [alt_names]
-DNS.1 = www.bing.com
+$SAN_LINE
 EOF
 
         openssl req \
@@ -657,7 +879,7 @@ write_cert_source() {
 
 cert_using_external() {
 
-    [ "$CERT_CRT" != "$CERT_DIR/www.bing.com.crt" ]
+    [ "${CERT_EXTERNAL:-0}" = "1" ]
 }
 
 # 把当前证书路径/SNI 同步到已有节点
@@ -727,12 +949,13 @@ set_cert_dir() {
         read NEW_SNI
     fi
 
-    [ -n "$NEW_SNI" ] || NEW_SNI="www.bing.com"
+    [ -n "$NEW_SNI" ] || NEW_SNI="$CERT_DEFAULT_SNI"
 
     CERT_CRT="$NEW_CRT"
     CERT_KEY="$NEW_KEY"
     CERT_SNI="$NEW_SNI"
     CERT_INSECURE="0"
+    CERT_EXTERNAL="1"
 
     # 自签证书（issuer == subject）仍需客户端跳过验证
     ISS="$(openssl x509 -in "$CERT_CRT" -noout -issuer 2>/dev/null | sed 's/^issuer=//')"
@@ -763,11 +986,13 @@ cert_use_selfsigned() {
 
     load_cert_source
 
+    ask_cert_domain || return 1
+
     generate_certificate || return 1
 
     apply_cert_paths
 
-    echo "[+] 已切回脚本自签证书（SNI www.bing.com）。"
+    echo "[+] 已切回脚本自签证书（SNI $CERT_SNI）。"
 }
 
 cert_menu() {
@@ -786,13 +1011,13 @@ cert_menu() {
         echo "  私钥：$CERT_KEY"
         echo "  域名：$CERT_SNI"
     else
-        echo "当前：脚本自签证书（www.bing.com，客户端跳过验证或固定 PEM）"
+        echo "当前：脚本自签证书（$CERT_SNI，客户端跳过验证或固定 PEM）"
     fi
 
     echo
     echo "1. 申请真实证书（acme.sh）"
     echo "2. 指定已有证书目录（自动扫描 fullchain.pem / privkey.pem）"
-    echo "3. 恢复脚本自签证书"
+    echo "3. 重新生成自签证书（可自定义域名 / IP）"
     echo "0. 返回"
     echo
     printf "请选择："
@@ -852,7 +1077,7 @@ select_cert_source() {
     echo " TLS 证书"
     echo "=========================================="
     echo
-    echo "1. 脚本自签证书（默认，100 年，客户端跳过验证或固定 PEM）"
+    echo "1. 脚本自签证书（默认，100 年，域名可自定义，客户端跳过验证或固定 PEM）"
     echo "2. 使用已有证书目录（递归查找 fullchain.pem + privkey.pem）"
     echo
     printf "请选择 [1]: "
@@ -866,6 +1091,10 @@ select_cert_source() {
             if [ -n "$DIR" ]; then
                 set_cert_dir "$DIR" || echo "已保持脚本自签证书。"
             fi
+            ;;
+        *)
+            # 默认自签：允许指定域名 / IP
+            ask_cert_domain
             ;;
     esac
 }
@@ -2936,21 +3165,39 @@ EOF
 BASE="/etc/sing-box"
 BIN="/usr/local/bin/sing-box"
 
-# 证书来源（与主脚本共用 cert-source.conf）
+# 证书来源（与主脚本共用 cert-source.conf / cert-name）
 CERT_DIR="$BASE/cert"
-CERT_CRT="$CERT_DIR/www.bing.com.crt"
-CERT_KEY="$CERT_DIR/www.bing.com.key"
-CERT_SNI="www.bing.com"
+CERT_DEFAULT_SNI="www.bing.com"
+CERT_SNI="$CERT_DEFAULT_SNI"
+CERT_CRT=""
+CERT_KEY=""
 CERT_INSECURE="1"
 CERT_SRC_CONF="$BASE/cert-source.conf"
+CERT_NAME_FILE="$BASE/cert-name"
+
+cert_file_base() {
+    printf '%s' "$1" | tr ':' '_'
+}
+
+cert_apply_name() {
+    _BASE_NAME="$(cert_file_base "$CERT_SNI")"
+    CERT_CRT="$CERT_DIR/$_BASE_NAME.crt"
+    CERT_KEY="$CERT_DIR/$_BASE_NAME.key"
+}
+
+if [ -s "$CERT_NAME_FILE" ]; then
+    _N="$(sed -n '1p' "$CERT_NAME_FILE" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$_N" ] && CERT_SNI="$_N"
+fi
+
+cert_apply_name
 
 [ -f "$CERT_SRC_CONF" ] && . "$CERT_SRC_CONF"
 
 if [ ! -s "$CERT_CRT" ] || [ ! -s "$CERT_KEY" ]; then
-    CERT_CRT="$CERT_DIR/www.bing.com.crt"
-    CERT_KEY="$CERT_DIR/www.bing.com.key"
-    CERT_SNI="www.bing.com"
+    CERT_SNI="$CERT_DEFAULT_SNI"
     CERT_INSECURE="1"
+    cert_apply_name
 fi
 
 # 限制 Go 堆内存，避免小内存机器上 sing-box 启动/运行时触发 OOM
@@ -3898,12 +4145,8 @@ DNSEOF
             fi
             sh /usr/local/bin/install-singbox.sh --cert
 
-            # 重新加载证书配置（可能已切换证书目录/恢复自签）
-            CERT_CRT="$CERT_DIR/www.bing.com.crt"
-            CERT_KEY="$CERT_DIR/www.bing.com.key"
-            CERT_SNI="www.bing.com"
-            CERT_INSECURE="1"
-            [ -f "$CERT_SRC_CONF" ] && . "$CERT_SRC_CONF"
+            # 重新加载证书配置（可能已切换证书目录 / 改了自签域名）
+            load_cert_source
 
             pause
             ;;
@@ -3980,19 +4223,39 @@ BASE="/etc/sing-box"
 LINK_DIR="$BASE/links"
 INFO="$BASE/server-info"
 
-# 证书来源（与主脚本共用 cert-source.conf）
+# 证书来源（与主脚本共用 cert-source.conf / cert-name）
 CERT_DIR="$BASE/cert"
-CERT_CRT="$CERT_DIR/www.bing.com.crt"
-CERT_KEY="$CERT_DIR/www.bing.com.key"
-CERT_SNI="www.bing.com"
+CERT_DEFAULT_SNI="www.bing.com"
+CERT_SNI="$CERT_DEFAULT_SNI"
+CERT_CRT=""
+CERT_KEY=""
 CERT_INSECURE="1"
 CERT_SRC_CONF="$BASE/cert-source.conf"
+CERT_NAME_FILE="$BASE/cert-name"
+
+cert_file_base() {
+    printf '%s' "$1" | tr ':' '_'
+}
+
+cert_apply_name() {
+    _BASE_NAME="$(cert_file_base "$CERT_SNI")"
+    CERT_CRT="$CERT_DIR/$_BASE_NAME.crt"
+    CERT_KEY="$CERT_DIR/$_BASE_NAME.key"
+}
+
+if [ -s "$CERT_NAME_FILE" ]; then
+    _N="$(sed -n '1p' "$CERT_NAME_FILE" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$_N" ] && CERT_SNI="$_N"
+fi
+
+cert_apply_name
 
 [ -f "$CERT_SRC_CONF" ] && . "$CERT_SRC_CONF"
 
 if [ ! -s "$CERT_CRT" ] || [ ! -s "$CERT_KEY" ]; then
-    CERT_SNI="www.bing.com"
+    CERT_SNI="$CERT_DEFAULT_SNI"
     CERT_INSECURE="1"
+    cert_apply_name
 fi
 
 mkdir -p "$LINK_DIR"

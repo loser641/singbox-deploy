@@ -3,9 +3,9 @@
 # sing-box 证书工具（acme.sh）—— 申请 / 恢复自签 / 卸载
 #
 # 独立于主脚本：只在运行时下载 acme.sh，不预装。
-# 申请到的真实证书装入 /etc/sing-box/cert/www.bing.com.crt/.key
-# （文件名固定）：主脚本部署协议时看到已有证书会直接复用，
-# 不会用自签名覆盖。
+# 申请到的真实证书装入 /etc/sing-box/cert/<域名>.crt/.key
+# （域名取自 cert-name，缺省 www.bing.com；IPv6 的冒号写作下划线）：
+# 主脚本部署协议时看到已有证书会直接复用，不会用自签名覆盖。
 # 覆盖安装前自动把现有证书备份到 /root/sb-cert-backup，
 # 选"恢复自签名"时原样还原（固定证书 PEM 继续有效），
 # 并清除 acme 申请记录，防止自动续期把真证书换回来。
@@ -20,8 +20,20 @@
 
 BASE="/etc/sing-box"
 CERT_DIR="$BASE/cert"
-CRT="$CERT_DIR/www.bing.com.crt"
-KEY="$CERT_DIR/www.bing.com.key"
+CERT_DEFAULT_SNI="www.bing.com"
+CERT_NAME_FILE="$BASE/cert-name"
+
+# 自签证书的域名：跟随主脚本写入的 cert-name
+CERT_SNI="$CERT_DEFAULT_SNI"
+if [ -s "$CERT_NAME_FILE" ]; then
+    _N="$(sed -n '1p' "$CERT_NAME_FILE" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$_N" ] && CERT_SNI="$_N"
+fi
+
+# 文件名安全化：IPv6 的冒号不适合直接做文件名
+_BASE_NAME="$(printf '%s' "$CERT_SNI" | tr ':' '_')"
+CRT="$CERT_DIR/$_BASE_NAME.crt"
+KEY="$CERT_DIR/$_BASE_NAME.key"
 BACKUP_DIR="/root/sb-cert-backup"
 ACME="$HOME/.acme.sh/acme.sh"
 
@@ -114,6 +126,18 @@ install_pkgs() {
 gen_selfsigned() {
     install_pkgs openssl || return 1
     mkdir -p "$CERT_DIR"
+
+    # SAN 类型随目标变化：IP 用 IP.1，域名用 DNS.1
+    case "$CERT_SNI" in
+        *:*) SAN_LINE="IP.1 = $CERT_SNI" ;;
+        *)
+            case "$CERT_SNI" in
+                *[!0-9.]*) SAN_LINE="DNS.1 = $CERT_SNI" ;;
+                *) SAN_LINE="IP.1 = $CERT_SNI" ;;
+            esac
+            ;;
+    esac
+
     cat > "$CERT_DIR/openssl.cnf" <<CNFEOF
 [req]
 distinguished_name = req_distinguished_name
@@ -126,7 +150,7 @@ ST = Washington
 L = Redmond
 O = Microsoft
 OU = Web
-CN = www.bing.com
+CN = $CERT_SNI
 
 [v3_req]
 subjectAltName = @alt_names
@@ -135,7 +159,7 @@ keyUsage = critical,digitalSignature,keyEncipherment
 extendedKeyUsage = serverAuth
 
 [alt_names]
-DNS.1 = www.bing.com
+$SAN_LINE
 CNFEOF
     openssl req \
         -x509 \
@@ -158,8 +182,8 @@ CNFEOF
 backup_cert() {
     if [ ! -d "$BACKUP_DIR" ] && [ -s "$CRT" ] && [ -s "$KEY" ]; then
         mkdir -p "$BACKUP_DIR"
-        cp -f "$CRT" "$BACKUP_DIR/www.bing.com.crt"
-        cp -f "$KEY" "$BACKUP_DIR/www.bing.com.key"
+        cp -f "$CRT" "$BACKUP_DIR/$_BASE_NAME.crt"
+        cp -f "$KEY" "$BACKUP_DIR/$_BASE_NAME.key"
         echo "已备份现有证书到 $BACKUP_DIR"
     fi
 }
@@ -181,10 +205,10 @@ restore_selfsigned() {
     fi
     rm -f /tmp/.sb-cert-new.crt /tmp/.sb-cert-new.key
 
-    if [ -s "$BACKUP_DIR/www.bing.com.crt" ] && [ -s "$BACKUP_DIR/www.bing.com.key" ]; then
+    if [ -s "$BACKUP_DIR/$_BASE_NAME.crt" ] && [ -s "$BACKUP_DIR/$_BASE_NAME.key" ]; then
         mkdir -p "$CERT_DIR"
-        cp -f "$BACKUP_DIR/www.bing.com.crt" "$CRT"
-        cp -f "$BACKUP_DIR/www.bing.com.key" "$KEY"
+        cp -f "$BACKUP_DIR/$_BASE_NAME.crt" "$CRT"
+        cp -f "$BACKUP_DIR/$_BASE_NAME.key" "$KEY"
         chmod 600 "$KEY"
         chmod 644 "$CRT"
         echo "已还原备份证书（原固定证书 PEM 继续有效）。"
@@ -238,7 +262,7 @@ show_cert_status() {
     else
         echo "  （无）"
     fi
-    if [ -s "$BACKUP_DIR/www.bing.com.crt" ]; then
+    if [ -s "$BACKUP_DIR/$_BASE_NAME.crt" ]; then
         echo "备份证书：$BACKUP_DIR（可还原）"
     else
         echo "备份证书：无"
@@ -319,6 +343,17 @@ if [ -z "$DOMAIN" ]; then
     read DOMAIN
 fi
 [ -n "$DOMAIN" ] || { echo "域名不能为空。"; exit 1; }
+
+# acme 申请的域名就是节点的 SNI：同步过去，
+# 否则证书 CN 与 sing-box 的 server_name 会对不上。
+if [ "$ACTION" = "issue" ]; then
+    CERT_SNI="$DOMAIN"
+    _BASE_NAME="$(printf '%s' "$CERT_SNI" | tr ':' '_')"
+    CRT="$CERT_DIR/$_BASE_NAME.crt"
+    KEY="$CERT_DIR/$_BASE_NAME.key"
+    printf '%s\n' "$CERT_SNI" > "$CERT_NAME_FILE"
+    chmod 600 "$CERT_NAME_FILE" 2>/dev/null || true
+fi
 
 if [ -z "$EMAIL" ] && [ -z "$YES" ]; then
     printf "请输入邮箱（到期提醒，留空默认 admin@%s）：" "$DOMAIN"
