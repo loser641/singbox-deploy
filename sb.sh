@@ -35,7 +35,7 @@
 
 set -u
 
-SCRIPT_VERSION="2026.11.21.1"
+SCRIPT_VERSION="2026.11.21.2"
 
 BIN="/usr/local/bin/sing-box"
 BASE="/etc/sing-box"
@@ -404,6 +404,8 @@ install_dependencies() {
     echo
     echo "[+] 安装依赖..."
 
+    APT_LOG="$BASE/.apt-install.log"
+
     if [ "$OS_ID" = "alpine" ]; then
 
         apk update >/dev/null 2>&1
@@ -425,7 +427,9 @@ install_dependencies() {
 
         export DEBIAN_FRONTEND=noninteractive
 
-        apt-get update -y >/dev/null 2>&1
+        : > "$APT_LOG"
+
+        apt-get update >>"$APT_LOG" 2>&1 || true
 
         apt-get install -y \
             curl \
@@ -438,8 +442,86 @@ install_dependencies() {
             procps \
             coreutils \
             openssl \
-            >/dev/null 2>&1
+            >>"$APT_LOG" 2>&1 || true
+
+        # Debian 转 LTS 后常见：Packages 索引里还留着旧版本号，
+        # 但对应 .deb 已从 pool 下架 → 404。清缓存强制走 IPv4 再试一次。
+        if ! command_exists jq; then
+            rm -rf /var/lib/apt/lists/*
+            apt-get update -o Acquire::ForceIPv4=true >>"$APT_LOG" 2>&1 || true
+            apt-get install -y \
+                curl \
+                wget \
+                tar \
+                gzip \
+                ca-certificates \
+                iproute2 \
+                jq \
+                procps \
+                coreutils \
+                openssl \
+                -o Acquire::ForceIPv4=true \
+                >>"$APT_LOG" 2>&1 || true
+        fi
     fi
+
+    # 软件源彻底坏掉时兜底：jq 是单文件静态二进制，直接从 GitHub 取
+    if ! command_exists jq; then
+        install_jq_static || true
+    fi
+
+    # 逐个核对，缺什么说什么，不再静默继续到后面才炸
+    MISSING=""
+    for c in curl tar gzip jq openssl; do
+        command_exists "$c" || MISSING="${MISSING:+$MISSING }$c"
+    done
+
+    if [ -n "$MISSING" ]; then
+
+        echo
+        echo "[!] 依赖安装失败，缺少：$MISSING"
+
+        if [ -s "$APT_LOG" ]; then
+            echo
+            echo "----- 软件源错误（末尾 15 行）-----"
+            tail -n 15 "$APT_LOG"
+            echo "-----------------------------------"
+        fi
+
+        echo
+        echo "可手动安装后重跑：apt-get install -y $MISSING"
+        return 1
+    fi
+
+    rm -f "$APT_LOG"
+    return 0
+}
+
+# jq 静态二进制兜底（apt 源 404 / 索引不同步时用）
+install_jq_static() {
+
+    case "$SB_ARCH" in
+        amd64) JQ_ARCH="amd64" ;;
+        arm64) JQ_ARCH="arm64" ;;
+        armv7) JQ_ARCH="armhf" ;;
+        *) return 1 ;;
+    esac
+
+    echo "[+] 软件源不可用，尝试下载 jq 静态二进制..."
+
+    curl -fsSL --max-time 60 \
+        "https://github.com/jqlang/jq/releases/latest/download/jq-linux-$JQ_ARCH" \
+        -o /usr/local/bin/jq 2>/dev/null || return 1
+
+    chmod 755 /usr/local/bin/jq
+
+    if /usr/local/bin/jq --version >/dev/null 2>&1; then
+        echo "[+] jq 已安装到 /usr/local/bin/jq（$(/usr/local/bin/jq --version)）"
+        return 0
+    fi
+
+    rm -f /usr/local/bin/jq
+    return 1
 }
 
 # ==========================================================
@@ -4487,7 +4569,11 @@ initial_setup() {
     load_cert_source
 
     detect_os
-    install_dependencies
+    install_dependencies || {
+        echo
+        echo "依赖不齐，已中止安装。装好上面的依赖后重新运行本脚本即可。"
+        exit 1
+    }
     select_kernel_flavor
     install_singbox
     enable_bbr
